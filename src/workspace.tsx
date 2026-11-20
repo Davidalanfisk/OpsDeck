@@ -172,7 +172,8 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
         </div>}
       </aside>
       <div className="dock-area">
-        <DockviewReact className="dockview-theme-dark ops-dock" components={panels} onReady={onReady} watermarkComponent={Empty} />
+        <DockviewReact className="dockview-theme-dark ops-dock" components={panels} onReady={onReady}
+          disableFloatingGroups={Boolean(window.opsDeckDesktop)} watermarkComponent={Empty} />
       </div>
     </div>
     {editor?.kind === 'connection' && <ConnectionEditor value={editor.item} close={closeEditor}

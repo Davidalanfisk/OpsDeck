@@ -1,4 +1,4 @@
-import type { Server } from 'node:http';
+import type { IncomingMessage, Server } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { Client } from 'ssh2';
 import type { ClientChannel } from 'ssh2';
@@ -14,11 +14,12 @@ const message = z.discriminatedUnion('type', [
   z.object({ type: z.literal('input'), data: z.string().max(48 * 1024) }),
 ]);
 
-export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origin?: string, host?: string) => boolean) {
+export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origin?: string, host?: string) => boolean,
+  authorize?: (request: IncomingMessage) => boolean) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const route = /^\/ssh\/([\w-]+)\/([\w-]+)$/.exec(req.url ?? '');
-    if (!route || !allowsOrigin(req.headers.origin, req.headers.host) || sockets.clients.size >= 24) {
+    if (!route || (authorize && !authorize(req)) || !allowsOrigin(req.headers.origin, req.headers.host) || sockets.clients.size >= 24) {
       socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
       return;
     }

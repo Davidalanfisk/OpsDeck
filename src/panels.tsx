@@ -4,6 +4,7 @@ import Markdown from 'react-markdown';
 import type { Note } from '../shared/model.ts';
 import { describe, readLocal, request, useOps, writeLocal } from './state.ts';
 import { SshTerminal } from './terminal.tsx';
+import { DesktopBrowser } from './desktop-browser.tsx';
 
 type Draft = { content: string; updatedAt: string };
 const saves = new Map<string, { timer: ReturnType<typeof setTimeout>; draft: Draft }>();
@@ -91,9 +92,11 @@ function TerminalPanel({ params }: IDockviewPanelProps<ItemParams>) {
     : <Gone item="SSH connection" />;
 }
 
-function LinkPanel({ params }: IDockviewPanelProps<ItemParams>) {
+function LinkPanel({ params, api }: IDockviewPanelProps<ItemParams>) {
   const connection = useOps(state => state.deck?.connections.find(item => item.id === params.itemId));
   if (!connection || connection.type === 'SSH') return <Gone item="web connection" />;
+  if (window.opsDeckDesktop) return <DesktopBrowser key={connection.url} bridge={window.opsDeckDesktop}
+    api={api} id={connection.id} clientId={connection.client_id} url={connection.url} name={connection.name} />;
   return <div className="link-panel">
     <div className="panel-toolbar"><span className="eyebrow">{connection.type}</span>
       <a href={connection.url} target="_blank" rel="noopener noreferrer">Open separately ↗</a>

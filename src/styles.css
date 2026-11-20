@@ -92,6 +92,7 @@ small, .muted { color: var(--muted); }
 .markdown > * + * { margin-top: .75em; }
 .markdown pre { overflow: auto; background: #0d111a; padding: .8em; }
 .link-panel iframe { width: 100%; flex: 1; background: #fff; border: 0; }
+.desktop-browser-slot { flex: 1; min-height: 0; background: var(--surface); }
 .link-panel small { padding: 4px 8px; }
 dialog { width: min(480px, calc(100vw - 24px)); max-height: calc(100dvh - 24px); color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
 dialog::backdrop { background: #090b12c4; }

@@ -1,0 +1,17 @@
+appId: com.opsdeck.desktop
+productName: OpsDeck
+directories:
+  output: release
+files:
+  - dist/**
+  - desktop-dist/main.cjs
+  - desktop-dist/preload.cjs
+  - package.json
+npmRebuild: false
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+mac:
+  target: zip
+  identity: '-'
+win:
+  target: zip
+  signAndEditExecutable: false
