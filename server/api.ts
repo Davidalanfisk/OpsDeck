@@ -34,13 +34,14 @@ export function api(db: DatabaseSync) {
   const client = Router({ mergeParams: true });
   router.use('/clients/:clientId', client);
   client.use((req, res, next) => {
-    const row = db.prepare('SELECT * FROM clients WHERE id = ?').get(req.params.clientId);
+    const id = req.params.clientId;
+    const row = typeof id === 'string' && db.prepare('SELECT * FROM clients WHERE id = ?').get(id);
     if (!row) { res.status(404).json({ error: 'Client not found' }); return; }
     res.locals.client = row;
     next();
   });
-  client.get('/', (req, res) => {
-    const id = req.params.clientId;
+  client.get('/', (_req, res) => {
+    const id = res.locals.client.id;
     res.json({
       client: res.locals.client,
       connections: db.prepare('SELECT * FROM connections WHERE client_id = ? ORDER BY name COLLATE NOCASE').all(id),
@@ -52,11 +53,11 @@ export function api(db: DatabaseSync) {
     const { name, description, colour } = clientInput.parse(req.body);
     const stamp = now();
     db.prepare('UPDATE clients SET name = ?, description = ?, colour = ?, updated_at = ? WHERE id = ?')
-      .run(name, description, colour, stamp, req.params.clientId);
+      .run(name, description, colour, stamp, res.locals.client.id);
     res.json({ ...res.locals.client, name, description, colour, updated_at: stamp });
   });
-  client.delete('/', (req, res) => {
-    db.prepare('DELETE FROM clients WHERE id = ?').run(req.params.clientId);
+  client.delete('/', (_req, res) => {
+    db.prepare('DELETE FROM clients WHERE id = ?').run(res.locals.client.id);
     res.sendStatus(204);
   });
   for (const table of ['connections', 'notes'] as const) {
@@ -79,19 +80,19 @@ export function api(db: DatabaseSync) {
       const fields = Object.keys(data);
       db.prepare(`INSERT INTO ${table} (id, client_id, ${fields.join(', ')}, created_at, updated_at)
                   VALUES (?, ?, ${fields.map(() => '?').join(', ')}, ?, ?)`)
-        .run(id, req.params.clientId, ...Object.values(data), stamp, stamp);
-      res.status(201).json({ id, client_id: req.params.clientId, ...data, created_at: stamp, updated_at: stamp });
+        .run(id, res.locals.client.id, ...Object.values(data), stamp, stamp);
+      res.status(201).json({ id, client_id: res.locals.client.id, ...data, created_at: stamp, updated_at: stamp });
     });
     client.put(`/${table}/:itemId`, (req, res) => {
       const data = values(req.body);
       const row = db.prepare(`UPDATE ${table} SET ${Object.keys(data).map(key => `${key} = ?`).join(', ')}, updated_at = ?
                               WHERE client_id = ? AND id = ? RETURNING *`)
-        .get(...Object.values(data), now(), req.params.clientId, req.params.itemId);
+        .get(...Object.values(data), now(), res.locals.client.id, req.params.itemId);
       if (!row) { res.status(404).json({ error: 'Item not found' }); return; }
       res.json(row);
     });
     client.delete(`/${table}/:itemId`, (req, res) => {
-      db.prepare(`DELETE FROM ${table} WHERE client_id = ? AND id = ?`).run(req.params.clientId, req.params.itemId);
+      db.prepare(`DELETE FROM ${table} WHERE client_id = ? AND id = ?`).run(res.locals.client.id, req.params.itemId);
       res.sendStatus(204);
     });
   }
@@ -99,12 +100,12 @@ export function api(db: DatabaseSync) {
     const { name, layout = null } = workspaceInput.parse(req.body);
     const stamp = now();
     const row = db.prepare('INSERT INTO workspaces VALUES (?, ?, ?, ?, ?, ?) RETURNING *')
-      .get(randomUUID(), req.params.clientId, name, layout && JSON.stringify(layout), stamp, stamp);
+      .get(randomUUID(), res.locals.client.id, name, layout && JSON.stringify(layout), stamp, stamp);
     if (!row) throw new Error('Workspace creation returned no row');
     res.status(201).json(workspace(row));
   });
   client.use('/workspaces/:workspaceId', (req, res, next) => {
-    const row = db.prepare('SELECT * FROM workspaces WHERE client_id = ? AND id = ?').get(req.params.clientId, req.params.workspaceId);
+    const row = db.prepare('SELECT * FROM workspaces WHERE client_id = ? AND id = ?').get(res.locals.client.id, req.params.workspaceId);
     if (!row) { res.status(404).json({ error: 'Workspace not found' }); return; }
     next();
   });
@@ -117,13 +118,13 @@ export function api(db: DatabaseSync) {
   });
   client.get('/workspaces/:workspaceId/session', (req, res) => {
     const row = db.prepare('SELECT session_json FROM sessions WHERE client_id = ? AND workspace_id = ?')
-      .get(req.params.clientId, req.params.workspaceId);
+      .get(res.locals.client.id, req.params.workspaceId);
     res.json(row ? JSON.parse(String(row.session_json)) : null);
   });
   client.put('/workspaces/:workspaceId/session', (req, res) => {
     db.prepare(`INSERT INTO sessions VALUES (?, ?, ?, ?, ?) ON CONFLICT(client_id, workspace_id)
                 DO UPDATE SET session_json = excluded.session_json, updated_at = excluded.updated_at`)
-      .run(randomUUID(), req.params.clientId, req.params.workspaceId, JSON.stringify(layoutInput.parse(req.body)), now());
+      .run(randomUUID(), res.locals.client.id, req.params.workspaceId, JSON.stringify(layoutInput.parse(req.body)), now());
     res.sendStatus(204);
   });
   router.use((_req, res) => { res.status(404).json({ error: 'API route not found' }); });

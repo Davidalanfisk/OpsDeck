@@ -94,7 +94,7 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
             ssh.connect({
               host, port, username, password: data.password,
               readyTimeout: 15_000, keepaliveInterval: 20_000, keepaliveCountMax: 3,
-              hostVerifier: key => {
+              hostVerifier: (key: Buffer) => {
                 verified = `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}` === fingerprint;
                 return verified;
               },
