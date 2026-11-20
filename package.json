@@ -1,0 +1,38 @@
+{
+  "name": "opsdeck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "dev:api": "node --watch --experimental-strip-types server/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server/index.ts",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
+    "dockview": "4.7.0",
+    "express": "5.1.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "react-markdown": "10.1.0",
+    "ssh2": "1.17.0",
+    "ws": "8.18.3",
+    "zod": "4.1.5",
+    "zustand": "5.0.8"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.3",
+    "@types/node": "24.3.0",
+    "@types/react": "19.1.12",
+    "@types/react-dom": "19.1.9",
+    "@types/ssh2": "1.15.5",
+    "@types/ws": "8.18.1",
+    "@vitejs/plugin-react": "5.0.2",
+    "typescript": "5.9.2",
+    "vite": "7.1.4"
+  }
+}

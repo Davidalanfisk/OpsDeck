@@ -1,0 +1,13 @@
+services:
+  opsdeck:
+    build: .
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${OPSDECK_BIND:-127.0.0.1}:${OPSDECK_PORT:-3000}:3000"
+    environment:
+      OPSDECK_ORIGIN: ${OPSDECK_ORIGIN:-}
+    volumes:
+      - workspace:/app/data
+volumes:
+  workspace:
