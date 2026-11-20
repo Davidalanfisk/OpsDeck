@@ -4,6 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
 import type { BrowserBounds, BrowserState } from '../shared/desktop.ts';
 import { createOpsDeckServer } from '../server/app.ts';
+import { browserProfiles } from './browser-profiles.ts';
 
 const secure: WebPreferences = {
   sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
@@ -37,7 +38,9 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     directory, frontend, origin,
     authorize: request => request.headers.host === host && request.headers[authHeader] === token,
   });
+  let browserActivity: ReturnType<typeof browserProfiles>;
   try {
+    browserActivity = browserProfiles(db);
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
       server.listen(port, '127.0.0.1', () => {
@@ -73,8 +76,13 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   workspace.on('will-redirect', event => event.preventDefault());
   workspace.on('will-attach-webview', event => event.preventDefault());
 
-  type Pane = { view: WebContentsView; url: string; popups: Set<BrowserWindow> };
+  type Pane = {
+    view: WebContentsView; url: string; clientId: string; popups: Set<BrowserWindow>;
+    attached: boolean; notify: () => void;
+  };
+  const paneLimit = 24;
   const panes = new Map<string, Pane>();
+  const pending = new Map<string, symbol>();
   const profiles = new Set<string>();
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) =>
     event.sender === workspace && event.senderFrame === workspace.mainFrame && event.senderFrame.url === workspacePage;
@@ -83,9 +91,30 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     if (!pane) return;
     panes.delete(id);
     for (const popup of pane.popups) popup.destroy();
-    window.contentView.removeChildView(pane.view);
-    pane.view.webContents.close();
+    if (pane.attached) window.contentView.removeChildView(pane.view);
+    if (!pane.view.webContents.isDestroyed()) pane.view.webContents.close();
   }
+  function release(id: string) {
+    pending.delete(id);
+    const pane = panes.get(id);
+    if (!pane?.attached) return;
+    pane.view.setVisible(false);
+    window.contentView.removeChildView(pane.view);
+    pane.attached = false;
+    for (const popup of pane.popups) popup.destroy();
+    browserActivity.markUsed(pane.clientId);
+    // Evict the least recently released pane first.
+    panes.delete(id);
+    panes.set(id, pane);
+  }
+  function closeClientTabs(id: string) {
+    for (const [key, pane] of panes) if (pane.clientId === id) close(key);
+  }
+  function sweep() {
+    browserActivity.sweep(new Set([...panes.values()].filter(pane => pane.attached).map(pane => pane.clientId)), closeClientTabs);
+  }
+  sweep();
+  const profileTimer = setInterval(sweep, 60 * 60 * 1000).unref();
 
   const allowedPage = (value: string) => {
     const url = webUrl(value);
@@ -96,7 +125,8 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     contents.on('will-navigate', event => { if (!permitted(event.url)) event.preventDefault(); });
     contents.on('will-redirect', event => { if (event.isMainFrame && !permitted(event.url)) event.preventDefault(); });
     contents.on('will-attach-webview', event => event.preventDefault());
-    contents.setWindowOpenHandler(({ url }) => permitted(url) && popups.size < 8 ? {
+    contents.setWindowOpenHandler(({ url }) => permitted(url) && popups.size < 8 &&
+      [...panes.values()].some(pane => pane.attached && pane.popups === popups) ? {
       action: 'allow',
       overrideBrowserWindowOptions: {
         parent: window, width: 900, height: 720, title: 'Website sign-in',
@@ -114,12 +144,34 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     });
   }
 
-  ipcMain.handle('browser:open', (event, id: unknown, clientId: unknown, value: unknown) => {
+  ipcMain.handle('browser:open', async (event, id: unknown, clientId: unknown, value: unknown) => {
     if (!trusted(event) || typeof id !== 'string' || !idPattern.test(id) ||
         typeof clientId !== 'string' || !idPattern.test(clientId) || !webUrl(value) || typeof value !== 'string' ||
-        !allowedPage(value) || panes.size >= 24) throw new Error('Could not open this website pane.');
+        !allowedPage(value) || (!pending.has(id) && pending.size >= paneLimit)) throw new Error('Could not open this website pane.');
+    const request = Symbol();
+    pending.set(id, request);
+    let profile: Electron.Session;
+    try {
+      if ([...panes.values()].some(pane => pane.attached && pane.clientId === clientId)) browserActivity.markUsed(clientId);
+      profile = await browserActivity.open(clientId, closeClientTabs);
+      if (pending.get(id) !== request || workspace.isDestroyed() || !trusted(event)) return;
+    } finally {
+      if (pending.get(id) === request) pending.delete(id);
+    }
+    const cached = panes.get(id);
+    if (cached?.clientId === clientId && cached.url === value && !cached.view.webContents.isDestroyed() &&
+        !cached.view.webContents.isCrashed()) {
+      if (!cached.attached) window.contentView.addChildView(cached.view);
+      cached.attached = true;
+      cached.notify();
+      return;
+    }
     close(id);
-    const profile = session.fromPartition(`persist:opsdeck-sites-${clientId}`);
+    if (panes.size >= paneLimit) {
+      const idle = [...panes].find(([, pane]) => !pane.attached);
+      if (!idle) throw new Error('Too many website panes are open.');
+      close(idle[0]);
+    }
     if (!profiles.has(clientId)) {
       profiles.add(clientId);
       profile.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
@@ -127,15 +179,10 @@ export async function startDesktop(directory: string, frontend: string, port = 4
       profile.webRequest.onBeforeRequest({ urls: [`http://${host}/*`, `ws://${host}/*`] }, (_details, callback) => callback({ cancel: true }));
     }
     const view = new WebContentsView({ webPreferences: { ...secure, session: profile } });
-    const pane: Pane = { view, url: value, popups: new Set() };
     const contents = view.webContents;
-    panes.set(id, pane);
-    view.setVisible(false);
-    window.contentView.addChildView(view);
-    protectSite(contents, profile, pane.popups);
     let failed = false;
     const notify = () => {
-      if (panes.get(id) !== pane || workspace.isDestroyed() || contents.isDestroyed()) return;
+      if (!pane.attached || panes.get(id) !== pane || workspace.isDestroyed() || contents.isDestroyed()) return;
       const state: BrowserState = {
         origin: webUrl(contents.getURL())?.origin ?? new URL(value).origin,
         loading: contents.isLoadingMainFrame(), failed,
@@ -143,6 +190,11 @@ export async function startDesktop(directory: string, frontend: string, port = 4
       };
       workspace.send('browser:state', id, state);
     };
+    const pane: Pane = { view, url: value, clientId, popups: new Set(), attached: true, notify };
+    panes.set(id, pane);
+    view.setVisible(false);
+    window.contentView.addChildView(view);
+    protectSite(contents, profile, pane.popups);
     contents.on('did-start-navigation', event => { if (event.isMainFrame && !event.isSameDocument) { failed = false; notify(); } });
     contents.on('did-navigate', notify);
     contents.on('did-stop-loading', notify);
@@ -159,7 +211,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   ipcMain.on('browser:layout', (event, id: string, value: unknown) => {
     if (!trusted(event)) return;
     const pane = panes.get(id);
-    if (!pane) return;
+    if (!pane?.attached) return;
     const [width, height] = window.getContentSize();
     const zoom = workspace.getZoomFactor();
     const bounds = browserBounds(value, Math.ceil(width / zoom), Math.ceil(height / zoom));
@@ -173,10 +225,10 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     }
     pane.view.setVisible(Boolean(bounds));
   });
-  ipcMain.on('browser:close', (event, id: string) => { if (trusted(event)) close(id); });
+  ipcMain.on('browser:release', (event, id: string) => { if (trusted(event)) release(id); });
   ipcMain.handle('browser:action', async (event, id: string, action: unknown) => {
     const pane = trusted(event) ? panes.get(id) : undefined;
-    if (!pane) throw new Error('Website pane is unavailable.');
+    if (!pane?.attached) throw new Error('Website pane is unavailable.');
     const contents = pane.view.webContents;
     if (action === 'back' && contents.navigationHistory.canGoBack()) contents.navigationHistory.goBack();
     if (action === 'forward' && contents.navigationHistory.canGoForward()) contents.navigationHistory.goForward();
@@ -188,16 +240,26 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     if (action === 'external') await shell.openExternal(pane.url);
   });
   workspace.on('did-start-navigation', event => {
-    if (event.isMainFrame && !event.isSameDocument) for (const id of panes.keys()) close(id);
+    if (event.isMainFrame && !event.isSameDocument) {
+      pending.clear();
+      for (const id of [...panes.keys()]) release(id);
+    }
   });
-  window.on('close', () => { for (const id of panes.keys()) close(id); });
+  window.on('close', () => {
+    pending.clear();
+    for (const [id, pane] of panes) {
+      if (pane.attached) browserActivity.markUsed(pane.clientId);
+      close(id);
+    }
+  });
   window.on('closed', () => {
+    clearInterval(profileTimer);
     ipcMain.removeHandler('browser:open');
     ipcMain.removeHandler('browser:action');
     ipcMain.removeAllListeners('browser:layout');
-    ipcMain.removeAllListeners('browser:close');
+    ipcMain.removeAllListeners('browser:release');
     workspaceSession.webRequest.onBeforeSendHeaders(null);
-    server.close(() => db.close());
+    server.close(() => { void browserActivity.settle().then(() => db.close()); });
   });
   await window.loadURL(workspacePage);
   await workspace.setVisualZoomLevelLimits(1, 1);

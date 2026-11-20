@@ -4,7 +4,7 @@ export type BrowserAction = 'back' | 'forward' | 'reload' | 'external';
 
 export type DesktopBridge = {
   open: (id: string, clientId: string, url: string) => Promise<void>;
-  close: (id: string) => void;
+  release: (id: string) => void;
   layout: (id: string, bounds: BrowserBounds | null) => void;
   action: (id: string, action: BrowserAction) => Promise<void>;
   onState: (id: string, notify: (state: BrowserState) => void) => () => void;

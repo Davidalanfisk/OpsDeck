@@ -3,7 +3,7 @@ import type { DesktopBridge } from '../shared/desktop.ts';
 
 const bridge: DesktopBridge = {
   open: (id, clientId, url) => ipcRenderer.invoke('browser:open', id, clientId, url),
-  close: id => ipcRenderer.send('browser:close', id),
+  release: id => ipcRenderer.send('browser:release', id),
   layout: (id, bounds) => ipcRenderer.send('browser:layout', id, bounds),
   action: (id, action) => ipcRenderer.invoke('browser:action', id, action),
   onState: (id, notify) => {

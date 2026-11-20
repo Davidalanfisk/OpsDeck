@@ -18,6 +18,10 @@ These initial builds are not vendor-signed or notarized. macOS Gatekeeper or Win
 
 Open a website connection from the library to load it as a top-level page in a docked Chromium pane. Sign-in popups and cookies work within a persistent browser profile shared by that client's panes. Profiles are separate from Chrome and from other OpsDeck clients. Some providers still require a system browser or a system-specific passkey flow; use **Open separately** if their login rejects the desktop pane. OpsDeck does not bypass certificate errors or change websites' login policies.
 
+Recently used tabs resume where you left off when you return to a workspace while OpsDeck is running. OpsDeck clears a client's cookies, website storage, and cache after 30 days without open website panes, on the next launch or during an hourly check. Sites can still expire their own logins sooner. Tab-only state can be lost when OpsDeck quits or needs to free an idle tab.
+
+To work with an AI assistant, use a desktop agent such as ChatGPT or Claude with desktop controls, if your version supports them. OpsDeck does not load Chrome extensions or give agents special access. See the [OpsDeck workspace skill](skills/opsdeck-workspace/SKILL.md) for UI guidance and boundaries.
+
 Desktop data is stored per user, not in the extracted ZIP: `~/Library/Application Support/OpsDeck/workspace` on macOS and `%APPDATA%\OpsDeck\workspace` on Windows. To move an existing macOS native install, stop both versions, then run this **before the first desktop launch** (adjust the source path if needed):
 
 ```sh
@@ -74,7 +78,7 @@ Install Docker for your platform and start its engine:
 Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.1.0` release with Git:
 
 ```sh
-git clone --branch v0.3.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+git clone --branch v0.3.1 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
 cd OpsDeck
 ```
 

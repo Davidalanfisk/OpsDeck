@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { app, BrowserWindow } from 'electron';
 import { startDesktop } from './window.ts';
@@ -37,9 +38,10 @@ void app.whenReady().then(async () => {
   site.listen(0, '127.0.0.1');
   await once(site, 'listening');
   const siteUrl = `http://127.0.0.1:${(site.address() as AddressInfo).port}`;
+  const directory = join(temporary, 'workspace');
   let window: BrowserWindow | undefined;
   try {
-    const desktop = await startDesktop(join(temporary, 'workspace'), resolve('dist'));
+    const desktop = await startDesktop(directory, resolve('dist'));
     window = desktop.window;
     const workspace = window.webContents;
     assert.equal((await fetch(`${desktop.origin}/api/clients`)).status, 403);
@@ -83,9 +85,48 @@ void app.whenReady().then(async () => {
     await until(() => popup.webContents.getTitle() === 'Logged in');
     assert.equal(await popup.webContents.executeJavaScript('Boolean(window.opener) && !window.opsDeckDesktop'), true);
     popup.close();
-    console.log('Desktop: protected API and SSH, dock visibility, frame-denying page, cookie redirect and popup verified');
+
+    await browser.executeJavaScript(`sessionStorage.setItem('tab-state', 'retained');
+      localStorage.setItem('profile-state', 'retained'); history.pushState(null, '', '/account');`);
+    const profile = browser.session;
+    await profile.cookies.set({ url: siteUrl, name: 'remembered', value: 'yes', expirationDate: Date.now() / 1000 + 3600 });
+    const inactivity = 30 * 24 * 60 * 60 * 1000;
+    async function leaveWorkspace(age: number) {
+      await workspace.executeJavaScript(`document.querySelector('.workspace-bar button').click()`);
+      await until(() => !content.children.includes(pane));
+      const db = new DatabaseSync(join(directory, 'opsdeck.sqlite'));
+      try {
+        assert.equal(db.prepare('UPDATE desktop_browser_activity SET last_used = ? WHERE client_id = ?')
+          .run(Date.now() - age, result.id).changes, 1);
+      } finally { db.close(); }
+    }
+    async function reopenWorkspace() {
+      await until(() => workspace.executeJavaScript(`(() => {
+        const button = document.querySelector('.open-workspace');
+        if (!button) return false;
+        button.click();
+        return true;
+      })()`));
+      return until(() => content.children.find(view => 'webContents' in view && view.webContents !== workspace));
+    }
+    await leaveWorkspace(inactivity - 60 * 60 * 1000);
+    assert.equal(await reopenWorkspace(), pane);
+    assert.equal(browser.getURL(), `${siteUrl}/account`);
+    assert.equal(await browser.executeJavaScript(`sessionStorage.getItem('tab-state')`), 'retained');
+    assert.equal((await profile.cookies.get({ name: 'remembered' })).length, 1);
+
+    await leaveWorkspace(inactivity);
+    const freshPane = await reopenWorkspace();
+    assert.notEqual(freshPane, pane);
+    assert.ok('webContents' in freshPane);
+    const freshBrowser = freshPane.webContents as Electron.WebContents;
+    await until(() => freshBrowser.getURL() === `${siteUrl}/login` && freshBrowser.getTitle() === 'Logged in');
+    assert.equal((await profile.cookies.get({ name: 'remembered' })).length, 0);
+    assert.equal(await freshBrowser.executeJavaScript(`localStorage.getItem('profile-state')`), null);
+    assert.equal(await freshBrowser.executeJavaScript(`sessionStorage.getItem('tab-state')`), null);
+    console.log('Desktop: workspace tab resume, 30-day profile expiry, protected API and SSH, top-level page and popup verified');
   } finally {
-    window?.destroy();
+    window?.close();
     site.close();
   }
 }).then(() => app.quit(), error => {

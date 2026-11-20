@@ -50,7 +50,7 @@ export function DesktopBrowser({ bridge, api, id, clientId, url, name }: {
       active = false;
       unsubscribe();
       cancelAnimationFrame(frame);
-      bridge.close(id);
+      bridge.release(id);
       document.removeEventListener('dragstart', drag, true);
       document.removeEventListener('drop', release, true);
       document.removeEventListener('dragend', release, true);
