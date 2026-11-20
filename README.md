@@ -2,13 +2,41 @@
 
 OpsDeck is a self-hosted, single-operator workspace for client operations. Keep SSH terminals, Markdown runbooks and web tools together in dockable windows.
 
-## Run with Docker Compose
+## Screenshots
+
+| Client dashboard | Docked workspace |
+|---|---|
+| ![OpsDeck client dashboard with three sample clients](docs/screenshots/clients.png) | ![OpsDeck workspace with a disconnected SSH terminal and a Markdown runbook](docs/screenshots/workspace.png) |
+
+Screenshots use demo data.
+
+## Install with Docker Compose (recommended)
+
+Install Docker for your platform and start its engine:
+
+| Platform | Prerequisites |
+|---|---|
+| Windows | Install [Docker Desktop for Windows](https://docs.docker.com/desktop/setup/install/windows-install/) with the WSL 2 backend. Start Docker Desktop and run the commands below in PowerShell. |
+| macOS | Install [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/), choosing the Apple silicon or Intel download for your Mac. Start Docker Desktop and run the commands below in Terminal. |
+| Linux | Install [Docker Engine](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) for your distribution. Run the commands below as a user with access to the Docker daemon. |
+
+Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.1.0` release with Git:
 
 ```sh
+git clone --branch v0.1.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+cd OpsDeck
+```
+
+From the folder containing `docker-compose.yml`, run:
+
+```sh
+docker compose version
 docker compose up --build -d
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Compose stores SQLite in the `workspace` named volume. `docker compose down` keeps the data; `docker compose down -v` deletes it.
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). If the app does not open, check `docker compose logs opsdeck`. Compose stores SQLite in the `workspace` named volume. `docker compose down` stops the app and keeps the data; `docker compose down -v` deletes it.
+
+To override the published port or other settings, create a `.env` file next to `docker-compose.yml` (one `KEY=value` entry per line), then rerun `docker compose up -d`.
 
 | Compose setting | Default | Purpose |
 |---|---|---|
@@ -17,6 +45,18 @@ Open [http://localhost:3000](http://localhost:3000). Compose stores SQLite in th
 | `OPSDECK_ORIGIN` | Same as the request host | Explicit public origin, e.g. `https://opsdeck.example.com`, if a reverse proxy rewrites the host |
 
 **Keep this MVP private.** OpsDeck has no login or multi-user permissions. Anyone who can reach it can read and modify client data and initiate SSH connections from the server. Keep the loopback binding, or put it behind an authenticated HTTPS reverse proxy or other trusted access boundary with WebSocket forwarding. Only configure SSH endpoints you administer or are authorized to access, and limit container network access to the hosts you need.
+
+## Install without Docker
+
+Install [Node.js 24 LTS](https://nodejs.org/en/download) for your platform: use the Windows or macOS installer, or the Linux download or a version manager that provides Node 24. Check `node --version` in a new terminal; it should report `v24.x`. From the extracted source or cloned repository, run these commands in order:
+
+```sh
+npm ci
+npm run build
+npm start
+```
+
+Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The server runs in the foreground; press `Ctrl+C` to stop it. SQLite data stays in `data/opsdeck.sqlite`, and restarting the server with `npm start` reuses it. If PowerShell blocks the npm script shim on Windows, use `npm.cmd` in place of `npm`.
 
 ## Use the workspace
 
