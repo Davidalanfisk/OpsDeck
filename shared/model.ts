@@ -3,16 +3,22 @@ import { z } from 'zod';
 export const connectionTypes = ['SSH', 'Website', 'WordPress', 'Plesk', 'SiteGround', 'DigitalOcean', 'Documentation', 'Custom'] as const;
 const name = z.string().trim().min(1).max(120);
 const webUrl = z.url({ protocol: /^https?$/ });
+const fingerprint = z.string().trim().regex(/^SHA256:[A-Za-z0-9+/]{43}$/);
 
 export const clientInput = z.object({
   name, description: z.string().max(4000), colour: z.string().regex(/^#[0-9a-f]{6}$/i),
 });
-export const connectionInput = z.discriminatedUnion('type', [
+export const connectionInput = z.union([
   z.object({
     name, type: z.literal('SSH'), host: z.string().trim().min(1).max(253),
     port: z.number().int().min(1).max(65535), username: name,
-    fingerprint: z.string().trim().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
-  }),
+    fingerprint, auth_method: z.literal('password').default('password'),
+    agent_fingerprint: z.null().optional(),
+  }).or(z.object({
+    name, type: z.literal('SSH'), host: z.string().trim().min(1).max(253),
+    port: z.number().int().min(1).max(65535), username: name,
+    fingerprint, auth_method: z.literal('agent'), agent_fingerprint: fingerprint,
+  })),
   z.object({ name, type: z.enum(['Website', 'WordPress', 'Plesk', 'SiteGround', 'DigitalOcean', 'Documentation', 'Custom']), url: webUrl }),
 ]);
 export const noteInput = z.object({ title: name, content: z.string().max(250_000) });

@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type { Server } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
 import { Client } from 'ssh2';
@@ -6,10 +5,11 @@ import type { ClientChannel } from 'ssh2';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 import { connectionInput } from '../shared/model.ts';
+import { agentIdentities, keyFingerprint, SelectedAgent } from './ssh-agent.ts';
 
 const dimensions = { cols: z.number().int().min(2).max(1000), rows: z.number().int().min(1).max(500) };
 const message = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('connect'), password: z.string().min(1).max(4096), ...dimensions }),
+  z.object({ type: z.literal('connect'), password: z.string().min(1).max(4096).optional(), ...dimensions }),
   z.object({ type: z.literal('resize'), ...dimensions }),
   z.object({ type: z.literal('input'), data: z.string().max(48 * 1024) }),
 ]);
@@ -29,7 +29,7 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { host, port, username, fingerprint } = target.data;
+    const { host, port, username, fingerprint, auth_method, agent_fingerprint } = target.data;
     sockets.handleUpgrade(req, socket, head, ws => {
       const ssh = new Client();
       let shell: ClientChannel | undefined;
@@ -56,7 +56,11 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
         shell?.close();
         ssh.destroy();
       });
-      ssh.on('error', error => fail(error.level === 'client-authentication'
+      ssh.on('error', error => fail(error.level === 'agent'
+        ? error.message === 'Selected SSH agent identity is missing'
+          ? 'The selected SSH agent identity is missing. Load it with ssh-add.'
+          : 'SSH agent unavailable or unable to sign. Check SSH_AUTH_SOCK and the loaded key.'
+        : error.level === 'client-authentication'
         ? 'SSH authentication failed.'
         : error.message.includes('Host denied')
           ? 'SSH host key did not match the saved fingerprint.'
@@ -78,7 +82,7 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
           status('connected');
         });
       });
-      ws.on('message', (raw, binary) => {
+      ws.on('message', async (raw, binary) => {
         if (binary) { ws.close(1003); return; }
         let body: unknown;
         try { body = JSON.parse(raw.toString()); }
@@ -90,12 +94,31 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
           started = true;
           clearTimeout(authTimeout);
           ({ cols, rows } = data);
+          if (auth_method === 'password' && !data.password) { fail('SSH password is required.'); return; }
+          let agent: SelectedAgent | undefined;
+          if (auth_method === 'agent') {
+            const socket = process.env.SSH_AUTH_SOCK;
+            try {
+              const identities = await agentIdentities();
+              if (ws.readyState !== WebSocket.OPEN) return;
+              if (!identities.some(identity => identity.fingerprint === agent_fingerprint)) {
+                fail('The selected SSH agent identity is missing. Load it with ssh-add.');
+                return;
+              }
+              if (!socket) { fail('SSH agent unavailable. Start OpsDeck with access to SSH_AUTH_SOCK.'); return; }
+              agent = new SelectedAgent(socket, agent_fingerprint);
+            } catch {
+              if (ws.readyState === WebSocket.OPEN) fail('SSH agent unavailable. Start OpsDeck with access to SSH_AUTH_SOCK.');
+              return;
+            }
+          }
           try {
             ssh.connect({
-              host, port, username, password: data.password,
+              host, port, username,
+              ...(agent ? { agent, authHandler: ['agent'] } : { password: data.password }),
               readyTimeout: 15_000, keepaliveInterval: 20_000, keepaliveCountMax: 3,
               hostVerifier: (key: Buffer) => {
-                verified = `SHA256:${createHash('sha256').update(key).digest('base64').replace(/=+$/, '')}` === fingerprint;
+                verified = keyFingerprint(key) === fingerprint;
                 return verified;
               },
             });

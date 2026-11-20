@@ -3,6 +3,7 @@ import type { DatabaseSync, SQLOutputValue } from 'node:sqlite';
 import { Router } from 'express';
 import { clientInput, connectionInput, layoutInput, noteInput, workspaceInput } from '../shared/model.ts';
 import { now } from './db.ts';
+import { agentIdentities } from './ssh-agent.ts';
 
 function workspace(row: Record<string, SQLOutputValue>) {
   const { layout_json, ...rest } = row;
@@ -12,6 +13,14 @@ function workspace(row: Record<string, SQLOutputValue>) {
 export function api(db: DatabaseSync) {
   const router = Router();
   router.get('/health', (_req, res) => { res.json({ ok: true }); });
+  router.get('/ssh-agent/identities', async (_req, res) => {
+    try {
+      const identities = await agentIdentities();
+      res.json(identities.map(({ fingerprint, type }) => ({ fingerprint, type })));
+    } catch {
+      res.status(503).json({ error: 'SSH agent unavailable. Start OpsDeck with access to SSH_AUTH_SOCK.' });
+    }
+  });
   router.get('/clients', (_req, res) => {
     res.json(db.prepare('SELECT * FROM clients ORDER BY name COLLATE NOCASE').all());
   });
@@ -71,6 +80,8 @@ export function api(db: DatabaseSync) {
         name: data.name, type: data.type, url: data.type === 'SSH' ? null : data.url,
         host: data.type === 'SSH' ? data.host : null, port: data.type === 'SSH' ? data.port : null,
         username: data.type === 'SSH' ? data.username : null, fingerprint: data.type === 'SSH' ? data.fingerprint : null,
+        auth_method: data.type === 'SSH' ? data.auth_method : 'password',
+        agent_fingerprint: data.type === 'SSH' && data.auth_method === 'agent' ? data.agent_fingerprint : null,
       };
     }
     client.post(`/${table}`, (req, res) => {

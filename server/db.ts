@@ -33,6 +33,9 @@ export function openDb(directory: string) {
       FOREIGN KEY (client_id, workspace_id) REFERENCES workspaces(client_id, id) ON DELETE CASCADE
     ) STRICT;
   `);
+  const columns = db.prepare('PRAGMA table_info(connections)').all().map(column => column.name);
+  if (!columns.includes('auth_method')) db.exec("ALTER TABLE connections ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'");
+  if (!columns.includes('agent_fingerprint')) db.exec('ALTER TABLE connections ADD COLUMN agent_fingerprint TEXT');
   return db;
 }
 

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { connectionTypes } from '../shared/model.ts';
 import type { Client, Connection, Note } from '../shared/model.ts';
-import { describe } from './state.ts';
+import { describe, request } from './state.ts';
 
 export function Dialog({ title, children, close }: { title: string; children: ReactNode; close: () => void }) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -58,6 +58,23 @@ export function ClientEditor({ value, save, close, remove }: EditorProps & { val
 export function ConnectionEditor({ value, save, close, remove }: EditorProps & { value?: Connection }) {
   const [type, setType] = useState<(typeof connectionTypes)[number]>(value?.type ?? 'SSH');
   const ssh = value?.type === 'SSH' ? value : undefined;
+  const [authMethod, setAuthMethod] = useState<'password' | 'agent'>(ssh?.auth_method ?? 'password');
+  const [identity, setIdentity] = useState(ssh?.auth_method === 'agent' ? ssh.agent_fingerprint : '');
+  const [identities, setIdentities] = useState<{ fingerprint: string; type: string }[]>([]);
+  const [agentError, setAgentError] = useState('');
+  async function loadIdentities() {
+    try {
+      const keys = await request<{ fingerprint: string; type: string }[]>('/ssh-agent/identities');
+      setIdentities(keys);
+      setAgentError(keys.length ? '' : 'No identities loaded. Use ssh-add and refresh.');
+    } catch (error) {
+      setIdentities([]);
+      setAgentError(describe(error));
+    }
+  }
+  useEffect(() => {
+    if (type === 'SSH' && authMethod === 'agent') void loadIdentities();
+  }, [type, authMethod]);
   return <Dialog title={value ? 'Edit connection' : 'New connection'} close={close}>
     <EditForm submit={data => save({ ...Object.fromEntries(data), ...(type === 'SSH' && { port: Number(data.get('port')) }) })} close={close} remove={remove}>
       <label>Name <input name="name" required maxLength={120} defaultValue={value?.name} autoFocus /></label>
@@ -72,8 +89,20 @@ export function ConnectionEditor({ value, save, close, remove }: EditorProps & {
         </div>
         <label>Username <input name="username" required maxLength={120} defaultValue={ssh?.username} /></label>
         <label>Trusted host key fingerprint <input name="fingerprint" required placeholder="SHA256:…" defaultValue={ssh?.fingerprint} />
-          <small>Get the SHA256 fingerprint from your server administrator or console. Passwords are entered only when connecting.</small>
+          <small>Get the server host key fingerprint from your server administrator or console.</small>
         </label>
+        <label>Authentication <select name="auth_method" value={authMethod} onChange={event => setAuthMethod(event.target.value === 'agent' ? 'agent' : 'password')}>
+          <option value="password">Password</option><option value="agent">SSH agent</option>
+        </select></label>
+        {authMethod === 'agent' && <>
+          <label>Agent identity <select name="agent_fingerprint" required value={identity} onChange={event => setIdentity(event.target.value)}>
+            <option value="">Select an identity</option>
+            {identity && !identities.some(key => key.fingerprint === identity) && <option value={identity}>{identity} (not currently loaded)</option>}
+            {identities.map(key => <option key={key.fingerprint} value={key.fingerprint}>{key.type} {key.fingerprint}</option>)}
+          </select><small>This is the public key fingerprint, not the server host key fingerprint.</small></label>
+          {agentError && <p role="alert" className="error">{agentError}</p>}
+          <button type="button" onClick={() => void loadIdentities()}>Refresh agent identities</button>
+        </>}
       </> : <label>URL <input type="url" name="url" required placeholder="https://example.com" defaultValue={value?.type !== 'SSH' ? value?.url : ''} /></label>}
     </EditForm>
   </Dialog>;

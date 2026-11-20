@@ -22,7 +22,7 @@ export function SshTerminal({ connection }: { connection: Extract<Connection, { 
     term.loadAddon(fit);
     term.open(element);
     terminal.current = term;
-    term.writeln('OpsDeck SSH — enter your password to connect.');
+    term.writeln(connection.auth_method === 'agent' ? 'OpsDeck SSH — connect using the selected agent identity.' : 'OpsDeck SSH — enter your password to connect.');
     const send = (data: object) => {
       if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(data));
     };
@@ -57,7 +57,7 @@ export function SshTerminal({ connection }: { connection: Extract<Connection, { 
     const term = terminal.current;
     if (!term || socket.current) return;
     const form = event.currentTarget;
-    const password = String(new FormData(form).get('password'));
+    const password = connection.auth_method === 'password' ? String(new FormData(form).get('password')) : undefined;
     form.reset();
     setBusy(true);
     setStatus('Connecting…');
@@ -96,7 +96,7 @@ export function SshTerminal({ connection }: { connection: Extract<Connection, { 
     <div className="terminal-body" ref={mount} />
     <form className="panel-toolbar terminal-login" onSubmit={connect}>
       {busy ? <button type="button" onClick={() => socket.current?.close()}>Disconnect</button> : <>
-        <input aria-label="SSH password" type="password" name="password" placeholder="SSH password" required maxLength={4096} autoComplete="off" />
+        {connection.auth_method === 'password' && <input aria-label="SSH password" type="password" name="password" placeholder="SSH password" required maxLength={4096} autoComplete="off" />}
         <button className="primary">Connect</button>
       </>}
     </form>
