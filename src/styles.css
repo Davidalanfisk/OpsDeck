@@ -71,18 +71,29 @@ small, .muted { color: var(--muted); }
   --dv-tabs-and-actions-container-background-color: #161c29;
   --dv-activegroup-visiblepanel-tab-background-color: #252d40;
   --dv-separator-border: #343c50;
+  --dv-tabs-and-actions-container-height: 32px;
 }
+.window-tab { display: flex; align-items: center; min-width: 0; height: 100%; gap: 5px; padding: 0 4px 0 9px; }
+.window-tab > svg, .window-control svg, .remote-entry svg, .file-tab svg { width: 15px; height: 15px; flex: none; }
+.window-tab > svg { color: #b7a7f6; }
+.window-tab .dv-default-tab { min-width: 0; }
+.window-actions { display: flex; align-items: center; height: 100%; padding: 0 4px; }
+.window-control, .file-icon-button, .file-tab-close { display: grid; place-items: center; padding: 4px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
+.window-control { width: 26px; height: 26px; }
+.window-close svg { width: 13px; height: 13px; }
 .workspace-empty { height: 100%; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 15px; gap: 6px; color: var(--muted); }
 .workspace-empty h2 { color: #e4e9f4; font-size: 1.15rem; }
 .empty-icon { color: var(--accent); font-size: 1.7rem; }
 .terminal-panel, .note-panel, .link-panel { height: 100%; display: flex; flex-direction: column; min-height: 0; }
-.panel-toolbar { min-height: 35px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--line); background: #151a25; }
+.panel-toolbar { min-height: 32px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 5px; padding: 3px 6px; border-bottom: 1px solid var(--line); background: #151a25; }
+.panel-toolbar button, .panel-toolbar input, .upload-button { padding: 3px 7px; }
 .panel-toolbar > .truncate { flex: 1; min-width: 0; }
 .terminal-status { color: var(--muted); font-size: .79rem; }
 .terminal-body { min-height: 0; flex: 1; padding: 7px; background: #0d111a; }
 .terminal-body .xterm { height: 100%; }
 .terminal-login { justify-content: end; border-bottom: 0; border-top: 1px solid var(--line); }
 .terminal-login input { flex: 1; min-width: 75px; }
+.terminal-login .terminal-status { flex: 1; min-width: 80px; }
 .segment button { padding: 2px 6px; margin-left: 2px; }
 .segment button[aria-pressed=true] { border-color: var(--accent); }
 .note-body, .markdown { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
@@ -98,13 +109,25 @@ small, .muted { color: var(--muted); }
 .file-login label { display: grid; gap: 5px; }
 .file-login input[type=checkbox] { width: auto; }
 .remote-path { flex: 1; min-width: 100px; }
-.upload-button { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; }
+.upload-button { position: relative; overflow: hidden; border: 1px solid var(--line); border-radius: 6px; }
 .upload-button input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
 .files-content { flex: 1; display: flex; min-height: 0; }
 .remote-list { flex: 0 0 200px; max-width: 35%; padding: 6px; overflow: auto; border-right: 1px solid var(--line); }
-.remote-entry { display: flex; gap: 3px; margin-bottom: 3px; }
-.remote-entry > .truncate { flex: 1; text-align: left; min-width: 0; }
+.remote-entry { display: flex; align-items: center; gap: 2px; margin-bottom: 2px; }
+.remote-entry-name { display: flex; align-items: center; gap: 7px; flex: 1; text-align: left; min-width: 0; padding: 5px 6px; border: 0; background: transparent; }
+.remote-entry-name.directory svg { color: #e7c47b; }
+.remote-entry-name.file svg { color: #9eb4cf; }
+.remote-entry-name.link svg { color: #ac9ce6; }
+.file-icon-button { width: 27px; height: 27px; }
 .remote-editor { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+.file-tabs { display: flex; flex: none; overflow-x: auto; background: #161c29; border-bottom: 1px solid var(--line); }
+.file-tab { display: flex; align-items: center; min-width: 0; max-width: 220px; border-right: 1px solid var(--line); border-top: 2px solid transparent; }
+.file-tab.active { background: #252d40; border-top-color: var(--accent); }
+.file-tab > [role=tab] { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 5px 8px; border: 0; border-radius: 0; background: transparent; text-align: left; }
+.file-tab-close { margin-right: 4px; flex: none; }
+.file-tab-close svg { width: 13px; height: 13px; }
+.dirty-indicator { color: var(--accent); font-size: 8px; }
+.file-editor-host:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .monaco-mount { flex: 1; min-height: 0; overflow: hidden; }
 .file-message { padding: 8px; overflow-wrap: anywhere; }
 .ssh-files-button { width: 100%; overflow: hidden; text-overflow: ellipsis; margin-block: 3px; text-align: left; }

@@ -6,10 +6,14 @@ import { maxTransferBytes } from '../shared/files.ts';
 import type { RemoteEntry, RemoteText } from '../shared/files.ts';
 import { confirmFileDiscard, setFileDirty } from './file-drafts.ts';
 import { describe, request, RequestError, useOps } from './state.ts';
+import { Icon } from './icons.tsx';
 
 const Monaco = lazy(() => import('./monaco.tsx').then(module => ({ default: module.Monaco })));
 const join = (path: string, name: string) => `${path.replace(/\/$/, '')}/${name}`;
 const parent = (path: string) => path.slice(0, path.lastIndexOf('/')) || '/';
+type OpenFile = RemoteText & { draft: string };
+const isDirty = (file: OpenFile) => file.content !== file.draft;
+const confirmTabDiscard = (file: OpenFile) => !isDirty(file) || window.confirm(`Discard unsaved edits to ${file.path}?`);
 
 export function FileBrowser({ connection }: { connection: FileConnection }) {
   const [session, setSession] = useState('');
@@ -17,14 +21,15 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
   const [path, setPath] = useState('/');
   const [pathInput, setPathInput] = useState('/');
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
-  const [file, setFile] = useState<RemoteText>();
-  const [content, setContent] = useState('');
+  const [files, setFiles] = useState<OpenFile[]>([]);
+  const [activePath, setActivePath] = useState('');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const alive = useRef(true);
-  const dirty = Boolean(file && file.content !== content);
+  const file = files.find(item => item.path === activePath);
+  const dirty = files.some(isDirty);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
   const id = `files:${connection.id}`;
@@ -79,19 +84,28 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
     });
   }
   async function open(name: string) {
-    if (!confirmFileDiscard(id)) return;
-    const result = await request<RemoteText>(`/files/${sessionRef.current}/read`, 'POST', { path: join(path, name) });
+    const target = join(path, name);
+    if (files.some(item => item.path === target)) { setActivePath(target); return; }
+    const result = await request<RemoteText>(`/files/${sessionRef.current}/read`, 'POST', { path: target });
     if (!alive.current) return;
-    setFile(result); setContent(result.content);
+    setFiles(previous => [...previous, { ...result, draft: result.content }]);
+    setActivePath(result.path);
   }
   function save() {
-    if (!file || !dirty || busyRef.current) return;
+    if (!file || !isDirty(file) || busyRef.current) return;
     void run(async () => {
-      const result = await request<{ revision: string }>(`/files/${sessionRef.current}/save`, 'PUT', { path: file.path, content, revision: file.revision });
+      const result = await request<{ revision: string }>(`/files/${sessionRef.current}/save`, 'PUT', { path: file.path, content: file.draft, revision: file.revision });
       if (!alive.current) return;
-      setFile({ ...file, content, revision: result.revision });
+      setFiles(previous => previous.map(item => item.path === file.path
+        ? { ...item, content: file.draft, revision: result.revision } : item));
       setNotice('Saved to the remote server.');
     });
+  }
+  function closeFile(target: OpenFile) {
+    if (!confirmTabDiscard(target)) return;
+    const remaining = files.filter(item => item.path !== target.path);
+    setFiles(remaining);
+    if (activePath === target.path) setActivePath(remaining.at(-1)?.path ?? '');
   }
   async function upload(upload: File) {
     if (upload.size > maxTransferBytes) throw new Error('Transfers are limited to 10 MiB.');
@@ -116,25 +130,16 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
     if (!confirmFileDiscard(id)) return;
     void run(async () => {
       await request(`/files/${sessionRef.current}`, 'DELETE');
-      sessionRef.current = ''; setSession(''); setFile(undefined); setEntries([]);
+      sessionRef.current = ''; setSession(''); setFiles([]); setActivePath(''); setEntries([]);
     });
   }
   const agent = isSshConnection(connection) && connection.auth_method === 'agent';
   return <div className="files-panel">
-    <div className="panel-toolbar">
-      <span className="truncate">{connection.type === 'SSH' ? 'SFTP' : connection.type}: {connection.username}@{connection.host}:{connection.port}</span>
-      {session && <>
-        <button disabled={busy} onClick={() => void run(async () => {
-          await request(`/files/${sessionRef.current}`, 'DELETE');
-          sessionRef.current = ''; setSession('');
-        })}>Reconnect</button>
-        <button disabled={busy} onClick={disconnect}>Disconnect</button>
-      </>}
-    </div>
     {!session ? <form className="file-login" onSubmit={connect}>
+      <span className="muted">{connection.type === 'SSH' ? 'SFTP' : connection.type}: {connection.username}@{connection.host}:{connection.port}</span>
       {!agent && <label>Password <input name="password" aria-label="File connection password" type="password" required autoComplete="off" maxLength={4096} /></label>}
       {agent && <p>Connect using the saved SSH agent identity.</p>}
-      {file && <p>Your open file and edits are retained. Reconnect to save or reload it.</p>}
+      {files.length > 0 && <p>Your open files and edits are retained. Reconnect to save or reload them.</p>}
       {connection.type === 'FTP' && <label className="error"><input name="allowInsecure" type="checkbox" required /> I understand FTP sends my password and files unencrypted.</label>}
       <button className="primary" disabled={busy}>Connect files</button>
     </form> : <>
@@ -146,28 +151,47 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
           const uploadFile = event.target.files?.[0]; event.target.value = '';
           if (uploadFile) void run(() => upload(uploadFile));
         }} /></label>
+        <button type="button" disabled={busy} onClick={() => void run(async () => {
+          await request(`/files/${sessionRef.current}`, 'DELETE');
+          sessionRef.current = ''; setSession('');
+        })}>Reconnect</button>
+        <button type="button" disabled={busy} onClick={disconnect}>Disconnect</button>
       </form>
       <div className="files-content">
         <div className="remote-list" aria-label="Remote files">
           {entries.map(entry => <div className="remote-entry" key={entry.name}>
-            <button className="truncate" disabled={busy || entry.kind === 'link'} title={entry.name} onClick={() => void run(() => entry.kind === 'directory' ? list(join(path, entry.name)) : open(entry.name))}>
-              {entry.kind === 'directory' ? '[dir] ' : entry.kind === 'link' ? '[link] ' : ''}{entry.name}
+            <button className={`remote-entry-name ${entry.kind}`} disabled={busy || entry.kind === 'link'} title={entry.kind === 'link' ? `${entry.name} (symbolic link)` : entry.name} onClick={() => void run(() => entry.kind === 'directory' ? list(join(path, entry.name)) : open(entry.name))}>
+              <Icon name={entry.kind === 'directory' ? 'folder' : entry.kind === 'link' ? 'link' : 'file'} />
+              <span className="truncate">{entry.name}</span>
             </button>
-            {entry.kind === 'file' && <button disabled={busy} aria-label={`Download ${entry.name}`} onClick={() => void run(() => download(entry.name))}>↓</button>}
+            {entry.kind === 'file' && <button className="file-icon-button" disabled={busy} title={`Download ${entry.name}`} aria-label={`Download ${entry.name}`} onClick={() => void run(() => download(entry.name))}><Icon name="download" /></button>}
           </div>)}
           {!entries.length && <small>No entries in this directory.</small>}
         </div>
         <div className="remote-editor">
           {file ? <>
-            <div className="panel-toolbar"><span className="truncate">{file.path}{dirty ? ' • Unsaved' : ''}</span>
-              <button disabled={busy} onClick={() => { if (confirmFileDiscard(id)) void run(async () => {
-                const result = await request<RemoteText>(`/files/${sessionRef.current}/read`, 'POST', { path: file.path });
-                setFile(result); setContent(result.content);
-              }); }}>Reload</button>
-              <button className="primary" disabled={busy || !dirty} onClick={save}>Save to server</button>
-              <button disabled={busy} onClick={() => { if (confirmFileDiscard(id)) setFile(undefined); }}>Close file</button>
+            <div className="file-tabs" role="tablist" aria-label="Open remote files">
+              {files.map(item => <div className={`file-tab ${item.path === activePath ? 'active' : ''}`} key={item.path}>
+                <button role="tab" aria-selected={item.path === activePath} title={item.path} disabled={busy}
+                  onClick={() => setActivePath(item.path)}>
+                  <Icon name="file" /><span className="truncate">{item.path.split('/').pop()}</span>
+                  {isDirty(item) && <span className="dirty-indicator" aria-label="Unsaved">●</span>}
+                </button>
+                <button className="file-tab-close" disabled={busy} aria-label={`Close ${item.path}`} title={`Close ${item.path}`} onClick={() => closeFile(item)}><Icon name="close" /></button>
+              </div>)}
             </div>
-            <Suspense fallback={<p>Loading editor…</p>}><Monaco path={file.path} value={content} readOnly={busy} change={setContent} save={save} /></Suspense>
+            <div className="panel-toolbar"><span className="truncate">{file.path}{isDirty(file) ? ' • Unsaved' : ''}</span>
+              <button disabled={busy} onClick={() => { if (confirmTabDiscard(file)) void run(async () => {
+                const result = await request<RemoteText>(`/files/${sessionRef.current}/read`, 'POST', { path: file.path });
+                if (alive.current) setFiles(previous => previous.map(item => item.path === file.path ? { ...result, draft: result.content } : item));
+              }); }}>Reload</button>
+              <button className="primary" disabled={busy || !isDirty(file)} onClick={save}>Save to server</button>
+            </div>
+            {files.map(item => <div className="file-editor-host" key={item.path} hidden={item.path !== activePath}>
+              <Suspense fallback={<p>Loading editor…</p>}><Monaco path={item.path} value={item.draft} readOnly={busy}
+                change={draft => setFiles(previous => previous.map(openFile => openFile.path === item.path ? { ...openFile, draft } : openFile))}
+                save={item.path === activePath ? save : () => {}} /></Suspense>
+            </div>)}
           </> : <div className="workspace-empty">Select a UTF-8 text file to edit. Save uploads your changes.</div>}
         </div>
       </div>

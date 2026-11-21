@@ -9,6 +9,7 @@ export const settings = { name: 'Local fixture', host: '127.0.0.1', username: 'o
 
 export async function ftpFixture(t, tls) {
   const files = new Map([['/fixture.php', Buffer.from(text)], ['/binary.bin', Buffer.from([0, 255, 1])]]);
+  const directories = new Set();
   const sockets = new Set();
   const dataServers = new Set();
   const commands = [];
@@ -59,7 +60,8 @@ export async function ftpFixture(t, tls) {
         reply('150 Opening data connection');
         const socket = await data;
         if (command === 'MLSD' || command === 'LIST') {
-          socket.end([...files].map(([path, value]) => `type=file;size=${value.length};modify=20260101000000; ${path.slice(1)}\r\n`).join(''));
+          socket.end([...directories].map(path => `type=dir;size=0; ${path.slice(1)}\r\n`).join('') +
+            [...files].map(([path, value]) => `type=file;size=${value.length};modify=20260101000000; ${path.slice(1)}\r\n`).join(''));
           reply('226 Complete');
         } else if (command === 'RETR') {
           const value = files.get(arg);
@@ -97,7 +99,7 @@ export async function ftpFixture(t, tls) {
     for (const passive of dataServers) if (passive.listening) passive.close();
     await new Promise(resolve => server.close(resolve));
   });
-  return { files, commands, connection: { ...settings, type: tls ? 'FTPS' : 'FTP', port: server.address().port, tls_mode: tls?.implicit ? 'implicit' : 'explicit' } };
+  return { files, directories, commands, connection: { ...settings, type: tls ? 'FTPS' : 'FTP', port: server.address().port, tls_mode: tls?.implicit ? 'implicit' : 'explicit' } };
 }
 
 export async function sftpFixture(t, identity) {

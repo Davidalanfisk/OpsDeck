@@ -75,10 +75,10 @@ Install Docker for your platform and start its engine:
 | macOS | Install [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/), choosing the Apple silicon or Intel download for your Mac. Start Docker Desktop and run the commands below in Terminal. |
 | Linux | Install [Docker Engine](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) for your distribution. Run the commands below as a user with access to the Docker daemon. |
 
-Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.1.0` release with Git:
+Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.4.0` release with Git:
 
 ```sh
-git clone --branch v0.3.1 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+git clone --branch v0.4.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
 cd OpsDeck
 ```
 
@@ -118,9 +118,9 @@ Add an **SFTP**, **FTPS**, or **FTP** connection from the workspace library. SFT
 
 For FTPS, choose explicit TLS (usually port 21) or implicit TLS (usually port 990) and enter the provider's exact hostname. Control and file transfer connections are encrypted and the certificate must be valid and trusted. Plain FTP requires a warning acknowledgement each time: it sends credentials and files unencrypted. Prefer SFTP or FTPS.
 
-Connect, browse directories, and click a regular file to open it in a docked Monaco editor, the editor engine used by VS Code. PHP, JavaScript, TypeScript, HTML, CSS, JSON and other common text formats get highlighting. This is a text editor, not the full VS Code IDE or extension marketplace.
+Connect, browse directories, and click regular files to open them in tabs in the docked Monaco editor, the editor engine used by VS Code. Each tab keeps its own draft; an unsaved dot marks changes, and closing or reloading a dirty file asks for confirmation. PHP, JavaScript, TypeScript, HTML, CSS, JSON and other common text formats get highlighting. This is a text editor, not the full VS Code IDE or extension marketplace.
 
-**Save to server** or **Ctrl+S / Cmd+S** uploads the open file; typing never uploads automatically. OpsDeck checks that the remote content still matches what you opened, uploads a temporary file, then renames it into place. If another tool changes the file, Save refuses to overwrite it and keeps your draft: copy your changes before choosing **Reload**. This is optimistic conflict detection, not a remote filesystem lock. Keep a backup of important production files.
+**Save to server** or **Ctrl+S / Cmd+S** uploads the active file; typing never uploads automatically. OpsDeck checks that the remote content still matches what you opened, uploads a temporary file, then renames it into place. If another tool changes the file, Save refuses to overwrite it and keeps your draft: copy your changes before choosing **Reload**. This is optimistic conflict detection, not a remote filesystem lock. Keep a backup of important production files.
 
 **Upload new file** creates a file without replacing an existing one. Use the download arrow for binary files or backups. Text editing is limited to UTF-8 files up to 1 MiB, and uploads/downloads to 10 MiB per file. Symbolic links are not opened. UTF-8 BOMs and standard LF/CRLF line endings are preserved; mixed line endings may be normalized by Monaco. Servers must permit temporary-file creation and rename; SFTP preserves Unix permission bits, and FTP uses `SITE CHMOD` when the server reports them.
 

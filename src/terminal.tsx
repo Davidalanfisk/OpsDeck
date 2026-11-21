@@ -89,12 +89,11 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
   }
 
   return <div className="terminal-panel">
-    <div className="panel-toolbar">
-      <span className="truncate">{connection.username}@{connection.host}:{connection.port}</span>
-      <span role="status" className="terminal-status">{status}</span>
-    </div>
     <div className="terminal-body" ref={mount} />
     <form className="panel-toolbar terminal-login" onSubmit={connect}>
+      <span className="truncate terminal-status" title={`${connection.username}@${connection.host}:${connection.port}`}>
+        {connection.username}@{connection.host}:{connection.port} · <span role="status">{status}</span>
+      </span>
       {busy ? <button type="button" onClick={() => socket.current?.close()}>Disconnect</button> : <>
         {connection.auth_method === 'password' && <input aria-label="SSH password" type="password" name="password" placeholder="SSH password" required maxLength={4096} autoComplete="off" />}
         <button className="primary">Connect</button>

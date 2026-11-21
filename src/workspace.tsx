@@ -1,21 +1,49 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { DockviewDefaultTab, DockviewReact } from 'dockview';
-import type { DockviewApi, DockviewReadyEvent, IDockviewPanelHeaderProps, SerializedDockview } from 'dockview';
+import type { DockviewApi, DockviewReadyEvent, IDockviewHeaderActionsProps, IDockviewPanelHeaderProps, SerializedDockview } from 'dockview';
 import { isFileConnection } from '../shared/model.ts';
 import type { Connection, Deck, Note, Workspace } from '../shared/model.ts';
 import { ConnectionEditor, NamedEditor } from './editors.tsx';
 import { flushNote, panels } from './panels.tsx';
 import { describe, readLocal, refreshDeck, request, useOps, writeLocal } from './state.ts';
 import { confirmFileDiscard } from './file-drafts.ts';
+import { Icon } from './icons.tsx';
 import 'dockview/dist/styles/dockview.css';
 
 type Snapshot = { saved: SerializedDockview; raw: string };
 type Editor = { kind: 'connection'; item?: Connection } | { kind: 'note'; item?: Note } | { kind: 'workspace' };
 const connectionPanel = (connection: Connection) => connection.type === 'SSH' ? 'terminal' : isFileConnection(connection) ? 'files' : 'link';
 function SafeTab(props: IDockviewPanelHeaderProps) {
-  return <DockviewDefaultTab {...props} closeActionOverride={() => {
-    if (confirmFileDiscard(props.api.id)) props.api.close();
-  }} />;
+  const [title, setTitle] = useState(props.api.title ?? 'pane');
+  const middle = useRef(false);
+  useEffect(() => {
+    const listener = props.api.onDidTitleChange(event => setTitle(event.title));
+    return () => listener.dispose();
+  }, [props.api]);
+  const connection = useOps(state => state.deck?.connections.find(item => item.id === props.params.itemId));
+  const icon = props.api.id.startsWith('files:') ? 'folder' : connection
+    ? connection.type === 'SSH' ? 'terminal' : isFileConnection(connection) ? 'folder' : 'window' : 'note';
+  const close = () => { if (confirmFileDiscard(props.api.id)) props.api.close(); };
+  return <div className="window-tab"><Icon name={icon} /><DockviewDefaultTab {...props} hideClose
+    onPointerDown={event => { middle.current = event.button === 1; }}
+    onPointerLeave={() => { middle.current = false; }}
+    onPointerUp={event => { if (middle.current && event.button === 1) close(); middle.current = false; }} />
+    <button className="window-control window-close" type="button" aria-label={`Close ${title}`} title={`Close ${title}`}
+      onPointerDown={event => event.preventDefault()} onClick={event => { event.stopPropagation(); close(); }}><Icon name="close" /></button>
+  </div>;
+}
+
+function WindowActions({ api, containerApi }: IDockviewHeaderActionsProps) {
+  const [maximized, setMaximized] = useState(api.isMaximized());
+  useEffect(() => {
+    const listener = containerApi.onDidMaximizedGroupChange(() => setMaximized(api.isMaximized()));
+    return () => listener.dispose();
+  }, [api, containerApi]);
+  return <div className="window-actions"><button type="button" className="window-control"
+    aria-label={maximized ? 'Restore pane' : 'Maximize pane'} title={maximized ? 'Restore pane' : 'Maximize pane'}
+    onClick={() => maximized ? api.exitMaximized() : api.maximize()}>
+    <Icon name={maximized ? 'restore' : 'maximize'} />
+  </button></div>;
 }
 
 function restore(dock: DockviewApi, layout: unknown) {
@@ -183,7 +211,8 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
       </aside>
       <div className="dock-area">
         <DockviewReact className="dockview-theme-dark ops-dock" components={panels} onReady={onReady}
-          defaultTabComponent={SafeTab} disableFloatingGroups={Boolean(window.opsDeckDesktop)} watermarkComponent={Empty} />
+          defaultTabComponent={SafeTab} rightHeaderActionsComponent={WindowActions}
+          disableFloatingGroups={Boolean(window.opsDeckDesktop)} watermarkComponent={Empty} />
       </div>
     </div>
     {editor?.kind === 'connection' && <ConnectionEditor value={editor.item} close={closeEditor}

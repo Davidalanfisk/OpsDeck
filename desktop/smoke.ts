@@ -27,6 +27,7 @@ async function until<T>(check: () => T | Promise<T>): Promise<NonNullable<T>> {
 void app.whenReady().then(async () => {
   const cleanups: Array<() => Promise<void>> = [];
   const ftp = await ftpFixture({ after: cleanup => cleanups.push(cleanup) });
+  ftp.directories.add('/public');
   const site = createServer((request, response) => {
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
@@ -150,6 +151,11 @@ void app.whenReady().then(async () => {
       button.click(); return true;
     })()`));
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.monaco-editor'))`));
+    assert.equal(await workspace.executeJavaScript(`Boolean(document.querySelector('.remote-entry-name.file svg'))`), true);
+    assert.equal(await workspace.executeJavaScript(`Boolean(document.querySelector('.remote-entry-name.directory[title="public"] svg'))`), true);
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Maximize pane"]').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('[aria-label="Restore pane"]'))`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Restore pane"]').click()`);
     const point = await workspace.executeJavaScript(`(() => {
       const box = document.querySelector('.monaco-editor .view-lines').getBoundingClientRect();
       return { x: Math.round(box.x + 20), y: Math.round(box.y + 10) };
@@ -161,14 +167,6 @@ void app.whenReady().then(async () => {
     await workspace.insertText('\r\n// desktop editor fixture');
     await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Save to server' && !button.disabled)`));
     assert.deepEqual(ftp.files.get('/fixture.php'), text);
-    await workspace.executeJavaScript(`window.confirm = () => false; document.querySelector('.workspace-bar button').click();`);
-    assert.equal(await workspace.executeJavaScript(`Boolean(document.querySelector('.files-panel'))`), true);
-    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Save to server').click()`);
-    await until(() => ftp.files.get('/fixture.php')?.includes(Buffer.from('// desktop editor fixture')));
-    const savedFile = ftp.files.get('/fixture.php');
-    assert.ok(savedFile);
-    assert.equal(savedFile.subarray(0, 3).toString('hex'), 'efbbbf');
-    assert.ok(savedFile.includes(Buffer.from('\r\n')));
     ftp.files.set('/fixture.json', Buffer.from('{"message": "hello"}\r\n'));
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Go / Refresh').click()`);
     await until(() => workspace.executeJavaScript(`(() => {
@@ -177,9 +175,9 @@ void app.whenReady().then(async () => {
       button.click(); return true;
     })()`));
     await until(() => workspace.executeJavaScript(`document.querySelector('.remote-editor .panel-toolbar .truncate')?.textContent === '/fixture.json'`));
-    await until(() => workspace.executeJavaScript(`document.querySelector('.monaco-editor')?.textContent.includes('message')`));
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.includes('message')`));
     const jsonPoint = await workspace.executeJavaScript(`(() => {
-      const box = document.querySelector('.monaco-editor .view-lines').getBoundingClientRect();
+      const box = document.querySelector('.file-editor-host:not([hidden]) .monaco-editor .view-lines').getBoundingClientRect();
       return { x: Math.round(box.x + 20), y: Math.round(box.y + 10) };
     })()`);
     workspace.sendInputEvent({ type: 'mouseDown', button: 'left', ...jsonPoint, clickCount: 1 });
@@ -188,13 +186,32 @@ void app.whenReady().then(async () => {
     workspace.sendInputEvent({ type: 'keyUp', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
     await workspace.insertText('\r\n// reconnect draft');
     await until(() => workspace.executeJavaScript(`document.querySelector('.remote-editor .panel-toolbar .truncate')?.textContent.includes('Unsaved')`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [aria-label="Unsaved"]').length`), 2);
+    await workspace.executeJavaScript(`window.confirm = () => false; document.querySelector('[title="/fixture.php"][role="tab"]').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('desktop editor fixture')`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Close /fixture.json"]').click(); document.querySelector('[aria-label="Close Local fixture"]').click(); document.querySelector('.workspace-bar button').click()`);
+    assert.equal(await workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [role="tab"]').length`), 2);
+    assert.equal(await workspace.executeJavaScript(`Boolean(document.querySelector('.files-panel'))`), true);
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Save to server').click()`);
+    await until(() => ftp.files.get('/fixture.php')?.includes(Buffer.from('// desktop editor fixture')));
+    const savedFile = ftp.files.get('/fixture.php');
+    assert.ok(savedFile);
+    assert.equal(savedFile.subarray(0, 3).toString('hex'), 'efbbbf');
+    assert.ok(savedFile.includes(Buffer.from('\r\n')));
+    await until(() => workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [aria-label="Unsaved"]').length === 1`));
+    await workspace.executeJavaScript(`document.querySelector('[title="/fixture.json"][role="tab"]').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
+    ftp.files.set('/fixture.json', Buffer.from('{"changed": true}'));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Save to server').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-message.error')?.textContent.includes('changed')`));
+    assert.equal(ftp.files.get('/fixture.json')?.toString(), '{"changed": true}');
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Reconnect').click()`);
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.file-login'))`));
     await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').value = 'fixture-password';
       document.querySelector('[name="allowInsecure"]').checked = true;
       document.querySelector('.file-login').requestSubmit();`);
-    await until(() => workspace.executeJavaScript(`document.querySelector('.monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
-    assert.equal(ftp.files.get('/fixture.json')?.toString(), '{"message": "hello"}\r\n');
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
+    assert.equal(ftp.files.get('/fixture.json')?.toString(), '{"changed": true}');
     const prompt = dialog.showMessageBoxSync;
     const views = [...window.contentView.children];
     dialog.showMessageBoxSync = () => 0;
@@ -206,10 +223,12 @@ void app.whenReady().then(async () => {
       assert.deepEqual(window.contentView.children, views);
     } finally { dialog.showMessageBoxSync = prompt; }
     assert.deepEqual(rendererErrors, []);
-    await workspace.executeJavaScript(`window.confirm = () => true; Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Close file').click()`);
-    console.log('Desktop: Monaco edits, explicit remote save, draft guard, BOM preservation and browser retention verified');
+    await until(() => workspace.executeJavaScript(`!document.querySelector('[aria-label="Close /fixture.json"]').disabled`));
+    await workspace.executeJavaScript(`window.confirm = () => true; document.querySelector('[aria-label="Close /fixture.json"]').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [role="tab"]').length === 1`));
+    console.log('Desktop: tabbed files, conflicts, draft guard, explicit save and browser retention verified');
   } finally {
-    window?.close();
+    window?.destroy();
     site.close();
     for (const cleanup of cleanups) await cleanup();
   }

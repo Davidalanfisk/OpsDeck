@@ -60,7 +60,6 @@ function NoteEditor({ note }: { note: Note }) {
   }, [note.id]);
   return <div className="note-panel">
     <div className="panel-toolbar">
-      <span className="eyebrow">MARKDOWN NOTE</span>
       <div className="segment">
         <button aria-pressed={!preview} onClick={() => setPreview(false)}>Write</button>
         <button aria-pressed={preview} onClick={() => setPreview(true)}>Preview</button>
@@ -100,7 +99,7 @@ function LinkPanel({ params, api }: IDockviewPanelProps<ItemParams>) {
   if (window.opsDeckDesktop) return <DesktopBrowser key={connection.url} bridge={window.opsDeckDesktop}
     api={api} id={connection.id} clientId={connection.client_id} url={connection.url} name={connection.name} />;
   return <div className="link-panel">
-    <div className="panel-toolbar"><span className="eyebrow">{connection.type}</span>
+    <div className="panel-toolbar">
       <a href={connection.url} target="_blank" rel="noopener noreferrer">Open separately ↗</a>
     </div>
     <iframe src={connection.url} title={connection.name} referrerPolicy="no-referrer"
