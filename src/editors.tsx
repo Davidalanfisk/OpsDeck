@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
-import { connectionTypes } from '../shared/model.ts';
+import { connectionTypes, isFileConnection, isSshConnection } from '../shared/model.ts';
 import type { Client, Connection, Note } from '../shared/model.ts';
 import { describe, request } from './state.ts';
 
@@ -57,7 +57,10 @@ export function ClientEditor({ value, save, close, remove }: EditorProps & { val
 
 export function ConnectionEditor({ value, save, close, remove }: EditorProps & { value?: Connection }) {
   const [type, setType] = useState<(typeof connectionTypes)[number]>(value?.type ?? 'SSH');
-  const ssh = value?.type === 'SSH' ? value : undefined;
+  const file = value && isFileConnection(value) ? value : undefined;
+  const ssh = value && isSshConnection(value) ? value : undefined;
+  const network = ['SSH', 'SFTP', 'FTP', 'FTPS'].includes(type);
+  const usesSsh = type === 'SSH' || type === 'SFTP';
   const [authMethod, setAuthMethod] = useState<'password' | 'agent'>(ssh?.auth_method ?? 'password');
   const [identity, setIdentity] = useState(ssh?.auth_method === 'agent' ? ssh.agent_fingerprint : '');
   const [identities, setIdentities] = useState<{ fingerprint: string; type: string }[]>([]);
@@ -73,21 +76,22 @@ export function ConnectionEditor({ value, save, close, remove }: EditorProps & {
     }
   }
   useEffect(() => {
-    if (type === 'SSH' && authMethod === 'agent') void loadIdentities();
+    if ((type === 'SSH' || type === 'SFTP') && authMethod === 'agent') void loadIdentities();
   }, [type, authMethod]);
   return <Dialog title={value ? 'Edit connection' : 'New connection'} close={close}>
-    <EditForm submit={data => save({ ...Object.fromEntries(data), ...(type === 'SSH' && { port: Number(data.get('port')) }) })} close={close} remove={remove}>
+    <EditForm submit={data => save({ ...Object.fromEntries(data), ...(network && { port: Number(data.get('port')) }) })} close={close} remove={remove}>
       <label>Name <input name="name" required maxLength={120} defaultValue={value?.name} autoFocus /></label>
       <label>Type <select name="type" value={type} onChange={event => {
         const next = connectionTypes.find(option => option === event.target.value);
         if (next) setType(next);
       }}>{connectionTypes.map(option => <option key={option}>{option}</option>)}</select></label>
-      {type === 'SSH' ? <>
+      {network ? <>
         <div className="field-row">
-          <label>Host <input name="host" required maxLength={253} defaultValue={ssh?.host} /></label>
-          <label>Port <input name="port" type="number" required min={1} max={65535} defaultValue={ssh?.port ?? 22} /></label>
+          <label>Host <input name="host" required maxLength={253} defaultValue={file?.host} /></label>
+          <label>Port <input key={usesSsh ? 'ssh' : 'ftp'} name="port" type="number" required min={1} max={65535} defaultValue={file?.port ?? (usesSsh ? 22 : 21)} /></label>
         </div>
-        <label>Username <input name="username" required maxLength={120} defaultValue={ssh?.username} /></label>
+        <label>Username <input name="username" required maxLength={120} defaultValue={file?.username} /></label>
+        {usesSsh ? <>
         <label>Trusted host key fingerprint <input name="fingerprint" required placeholder="SHA256:…" defaultValue={ssh?.fingerprint} />
           <small>Get the server host key fingerprint from your server administrator or console.</small>
         </label>
@@ -103,7 +107,14 @@ export function ConnectionEditor({ value, save, close, remove }: EditorProps & {
           {agentError && <p role="alert" className="error">{agentError}</p>}
           <button type="button" onClick={() => void loadIdentities()}>Refresh agent identities</button>
         </>}
-      </> : <label>URL <input type="url" name="url" required placeholder="https://example.com" defaultValue={value?.type !== 'SSH' ? value?.url : ''} /></label>}
+        </> : <>
+          {type === 'FTPS' && <label>TLS mode <select name="tls_mode" defaultValue={file && 'tls_mode' in file ? file.tls_mode : 'explicit'}>
+            <option value="explicit">Explicit TLS (usually port 21)</option><option value="implicit">Implicit TLS (usually port 990)</option>
+          </select><small>Certificates must be valid for the host. TLS verification cannot be disabled.</small></label>}
+          {type === 'FTP' && <p className="error">FTP sends passwords and files unencrypted. Prefer FTPS or SFTP.</p>}
+          <small>Enter the password when connecting; it is never saved.</small>
+        </>}
+      </> : <label>URL <input type="url" name="url" required placeholder="https://example.com" defaultValue={value && 'url' in value ? value.url : ''} /></label>}
     </EditForm>
   </Dialog>;
 }

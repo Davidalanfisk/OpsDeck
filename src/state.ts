@@ -1,5 +1,11 @@
 import { create } from 'zustand';
 import type { Deck } from '../shared/model.ts';
+import { confirmFileDiscard } from './file-drafts.ts';
+
+export class RequestError extends Error {
+  status: number;
+  constructor(message: string, status: number) { super(message); this.status = status; }
+}
 
 export async function request<T>(path: string, method = 'GET', body?: unknown, keepalive = false): Promise<T> {
   const response = await fetch(`/api${path}`, {
@@ -8,7 +14,7 @@ export async function request<T>(path: string, method = 'GET', body?: unknown, k
   });
   if (!response.ok) {
     const data = await response.json().catch(() => null);
-    throw new Error(data?.error ?? `Request failed (${response.status})`);
+    throw new RequestError(data?.error ?? `Request failed (${response.status})`, response.status);
   }
   return response.status === 204 ? undefined as T : response.json();
 }
@@ -39,6 +45,7 @@ type State = {
 export const useOps = create<State>(set => ({
   location: readLocal<Location>('location') ?? {},
   navigate: location => {
+    if (!confirmFileDiscard()) return;
     const saved = writeLocal('location', location);
     set(state => ({
       location,

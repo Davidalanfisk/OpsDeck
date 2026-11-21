@@ -5,6 +5,8 @@ import type { Note } from '../shared/model.ts';
 import { describe, readLocal, request, useOps, writeLocal } from './state.ts';
 import { SshTerminal } from './terminal.tsx';
 import { DesktopBrowser } from './desktop-browser.tsx';
+import { isFileConnection } from '../shared/model.ts';
+import { FileBrowser } from './files.tsx';
 
 type Draft = { content: string; updatedAt: string };
 const saves = new Map<string, { timer: ReturnType<typeof setTimeout>; draft: Draft }>();
@@ -94,7 +96,7 @@ function TerminalPanel({ params }: IDockviewPanelProps<ItemParams>) {
 
 function LinkPanel({ params, api }: IDockviewPanelProps<ItemParams>) {
   const connection = useOps(state => state.deck?.connections.find(item => item.id === params.itemId));
-  if (!connection || connection.type === 'SSH') return <Gone item="web connection" />;
+  if (!connection || isFileConnection(connection)) return <Gone item="web connection" />;
   if (window.opsDeckDesktop) return <DesktopBrowser key={connection.url} bridge={window.opsDeckDesktop}
     api={api} id={connection.id} clientId={connection.client_id} url={connection.url} name={connection.name} />;
   return <div className="link-panel">
@@ -107,8 +109,15 @@ function LinkPanel({ params, api }: IDockviewPanelProps<ItemParams>) {
   </div>;
 }
 
+function FilesPanel({ params }: IDockviewPanelProps<ItemParams>) {
+  const connection = useOps(state => state.deck?.connections.find(item => item.id === params.itemId));
+  return connection && isFileConnection(connection)
+    ? <FileBrowser key={connection.updated_at} connection={connection} />
+    : <Gone item="file connection" />;
+}
+
 function Gone({ item }: { item: string }) {
   return <div className="workspace-empty">This {item} is no longer available. Close this tab to remove it.</div>;
 }
 
-export const panels = { note: NotePanel, terminal: TerminalPanel, link: LinkPanel };
+export const panels = { note: NotePanel, terminal: TerminalPanel, link: LinkPanel, files: FilesPanel };

@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, ipcMain, session, shell } from 'electron';
+import { BrowserWindow, WebContentsView, dialog, ipcMain, session, shell } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents, WebPreferences } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
@@ -64,6 +64,13 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     webPreferences: { ...secure, session: workspaceSession, preload: join(__dirname, 'preload.cjs') },
   });
   const workspace = window.webContents;
+  workspace.on('will-prevent-unload', event => {
+    if (dialog.showMessageBoxSync(window, {
+      type: 'warning', message: 'Discard unsaved remote file edits?',
+      detail: 'Drafts are not saved locally. Transfers already started are not cancelled.',
+      buttons: ['Cancel', 'Discard'], defaultId: 0, cancelId: 0, noLink: true,
+    }) === 1) event.preventDefault();
+  });
   workspace.setWindowOpenHandler(({ url }) => {
     const external = webUrl(url);
     if (external && external.origin !== origin) void shell.openExternal(external.href).catch(() => {
@@ -90,8 +97,8 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     const pane = panes.get(id);
     if (!pane) return;
     panes.delete(id);
-    for (const popup of pane.popups) popup.destroy();
-    if (pane.attached) window.contentView.removeChildView(pane.view);
+    for (const popup of pane.popups) if (!popup.isDestroyed()) popup.destroy();
+    if (pane.attached && !window.isDestroyed()) window.contentView.removeChildView(pane.view);
     if (!pane.view.webContents.isDestroyed()) pane.view.webContents.close();
   }
   function release(id: string) {
@@ -245,14 +252,12 @@ export async function startDesktop(directory: string, frontend: string, port = 4
       for (const id of [...panes.keys()]) release(id);
     }
   });
-  window.on('close', () => {
+  window.on('closed', () => {
     pending.clear();
     for (const [id, pane] of panes) {
       if (pane.attached) browserActivity.markUsed(pane.clientId);
       close(id);
     }
-  });
-  window.on('closed', () => {
     clearInterval(profileTimer);
     ipcMain.removeHandler('browser:open');
     ipcMain.removeHandler('browser:action');

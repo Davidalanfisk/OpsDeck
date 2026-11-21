@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, dialog } from 'electron';
 import { startDesktop } from './window.ts';
+import { ftpFixture, text } from '../test/fixtures/remote.mjs';
 
 const temporary = mkdtempSync(join(tmpdir(), 'opsdeck-desktop-'));
 app.setPath('userData', temporary);
@@ -24,6 +25,8 @@ async function until<T>(check: () => T | Promise<T>): Promise<NonNullable<T>> {
 }
 
 void app.whenReady().then(async () => {
+  const cleanups: Array<() => Promise<void>> = [];
+  const ftp = await ftpFixture({ after: cleanup => cleanups.push(cleanup) });
   const site = createServer((request, response) => {
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
@@ -44,6 +47,10 @@ void app.whenReady().then(async () => {
     const desktop = await startDesktop(directory, resolve('dist'));
     window = desktop.window;
     const workspace = window.webContents;
+    const rendererErrors: string[] = [];
+    workspace.on('console-message', details => {
+      if (/Uncaught|Could not create web worker/.test(details.message)) rendererErrors.push(details.message);
+    });
     assert.equal((await fetch(`${desktop.origin}/api/clients`)).status, 403);
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('main'))`));
     const result = await workspace.executeJavaScript(`(async () => {
@@ -124,10 +131,87 @@ void app.whenReady().then(async () => {
     assert.equal((await profile.cookies.get({ name: 'remembered' })).length, 0);
     assert.equal(await freshBrowser.executeJavaScript(`localStorage.getItem('profile-state')`), null);
     assert.equal(await freshBrowser.executeJavaScript(`sessionStorage.getItem('tab-state')`), null);
-    console.log('Desktop: workspace tab resume, 30-day profile expiry, protected API and SSH, top-level page and popup verified');
+
+    await workspace.executeJavaScript(`fetch('/api/clients/' + ${JSON.stringify(result.id)} + '/connections', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(${JSON.stringify(ftp.connection)})
+    }).then(() => location.reload())`);
+    await until(() => workspace.executeJavaScript(`(() => {
+      const button = document.querySelector('button[title="Local fixture"]');
+      if (!button || button.disabled) return false;
+      button.click(); return true;
+    })()`));
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.file-login'))`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').value = 'fixture-password';
+      document.querySelector('[name="allowInsecure"]').checked = true;
+      document.querySelector('.file-login').requestSubmit();`);
+    await until(() => workspace.executeJavaScript(`(() => {
+      const button = document.querySelector('.remote-entry button[title="fixture.php"]');
+      if (!button || button.disabled) return false;
+      button.click(); return true;
+    })()`));
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.monaco-editor'))`));
+    const point = await workspace.executeJavaScript(`(() => {
+      const box = document.querySelector('.monaco-editor .view-lines').getBoundingClientRect();
+      return { x: Math.round(box.x + 20), y: Math.round(box.y + 10) };
+    })()`);
+    workspace.sendInputEvent({ type: 'mouseDown', button: 'left', ...point, clickCount: 1 });
+    workspace.sendInputEvent({ type: 'mouseUp', button: 'left', ...point, clickCount: 1 });
+    workspace.sendInputEvent({ type: 'keyDown', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+    workspace.sendInputEvent({ type: 'keyUp', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+    await workspace.insertText('\r\n// desktop editor fixture');
+    await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Save to server' && !button.disabled)`));
+    assert.deepEqual(ftp.files.get('/fixture.php'), text);
+    await workspace.executeJavaScript(`window.confirm = () => false; document.querySelector('.workspace-bar button').click();`);
+    assert.equal(await workspace.executeJavaScript(`Boolean(document.querySelector('.files-panel'))`), true);
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Save to server').click()`);
+    await until(() => ftp.files.get('/fixture.php')?.includes(Buffer.from('// desktop editor fixture')));
+    const savedFile = ftp.files.get('/fixture.php');
+    assert.ok(savedFile);
+    assert.equal(savedFile.subarray(0, 3).toString('hex'), 'efbbbf');
+    assert.ok(savedFile.includes(Buffer.from('\r\n')));
+    ftp.files.set('/fixture.json', Buffer.from('{"message": "hello"}\r\n'));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Go / Refresh').click()`);
+    await until(() => workspace.executeJavaScript(`(() => {
+      const button = document.querySelector('.remote-entry button[title="fixture.json"]');
+      if (!button || button.disabled) return false;
+      button.click(); return true;
+    })()`));
+    await until(() => workspace.executeJavaScript(`document.querySelector('.remote-editor .panel-toolbar .truncate')?.textContent === '/fixture.json'`));
+    await until(() => workspace.executeJavaScript(`document.querySelector('.monaco-editor')?.textContent.includes('message')`));
+    const jsonPoint = await workspace.executeJavaScript(`(() => {
+      const box = document.querySelector('.monaco-editor .view-lines').getBoundingClientRect();
+      return { x: Math.round(box.x + 20), y: Math.round(box.y + 10) };
+    })()`);
+    workspace.sendInputEvent({ type: 'mouseDown', button: 'left', ...jsonPoint, clickCount: 1 });
+    workspace.sendInputEvent({ type: 'mouseUp', button: 'left', ...jsonPoint, clickCount: 1 });
+    workspace.sendInputEvent({ type: 'keyDown', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+    workspace.sendInputEvent({ type: 'keyUp', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+    await workspace.insertText('\r\n// reconnect draft');
+    await until(() => workspace.executeJavaScript(`document.querySelector('.remote-editor .panel-toolbar .truncate')?.textContent.includes('Unsaved')`));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Reconnect').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.file-login'))`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').value = 'fixture-password';
+      document.querySelector('[name="allowInsecure"]').checked = true;
+      document.querySelector('.file-login').requestSubmit();`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
+    assert.equal(ftp.files.get('/fixture.json')?.toString(), '{"message": "hello"}\r\n');
+    const prompt = dialog.showMessageBoxSync;
+    const views = [...window.contentView.children];
+    dialog.showMessageBoxSync = () => 0;
+    try {
+      const prevented = once(workspace, 'will-prevent-unload', { signal: AbortSignal.timeout(5000) });
+      window.close();
+      await prevented;
+      assert.equal(window.isDestroyed(), false);
+      assert.deepEqual(window.contentView.children, views);
+    } finally { dialog.showMessageBoxSync = prompt; }
+    assert.deepEqual(rendererErrors, []);
+    await workspace.executeJavaScript(`window.confirm = () => true; Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Close file').click()`);
+    console.log('Desktop: Monaco edits, explicit remote save, draft guard, BOM preservation and browser retention verified');
   } finally {
     window?.close();
     site.close();
+    for (const cleanup of cleanups) await cleanup();
   }
 }).then(() => app.quit(), error => {
   console.error(error);

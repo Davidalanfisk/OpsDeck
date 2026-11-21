@@ -5,7 +5,8 @@ import type { ClientChannel } from 'ssh2';
 import { WebSocket, WebSocketServer } from 'ws';
 import { z } from 'zod';
 import { connectionInput } from '../shared/model.ts';
-import { agentIdentities, keyFingerprint, SelectedAgent } from './ssh-agent.ts';
+import { keyFingerprint } from './ssh-agent.ts';
+import { sshAuthentication, sshErrorDetail } from './ssh-auth.ts';
 
 const dimensions = { cols: z.number().int().min(2).max(1000), rows: z.number().int().min(1).max(500) };
 const message = z.discriminatedUnion('type', [
@@ -30,7 +31,8 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
     }
-    const { host, port, username, fingerprint, auth_method, agent_fingerprint } = target.data;
+    const connection = target.data;
+    const { host, port, username, fingerprint } = connection;
     sockets.handleUpgrade(req, socket, head, ws => {
       const ssh = new Client();
       let shell: ClientChannel | undefined;
@@ -57,15 +59,7 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
         shell?.close();
         ssh.destroy();
       });
-      ssh.on('error', error => fail(error.level === 'agent'
-        ? error.message === 'Selected SSH agent identity is missing'
-          ? 'The selected SSH agent identity is missing. Load it with ssh-add.'
-          : 'SSH agent unavailable or unable to sign. Check SSH_AUTH_SOCK and the loaded key.'
-        : error.level === 'client-authentication'
-        ? 'SSH authentication failed.'
-        : error.message.includes('Host denied')
-          ? 'SSH host key did not match the saved fingerprint.'
-          : 'SSH connection failed. Check the host, port and network access.'));
+      ssh.on('error', error => fail(sshErrorDetail(error)));
       ssh.on('close', () => { status('disconnected'); ws.close(); });
       ssh.on('ready', () => {
         ssh.shell({ term: 'xterm-256color', cols, rows }, (error, channel) => {
@@ -95,28 +89,14 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
           started = true;
           clearTimeout(authTimeout);
           ({ cols, rows } = data);
-          if (auth_method === 'password' && !data.password) { fail('SSH password is required.'); return; }
-          let agent: SelectedAgent | undefined;
-          if (auth_method === 'agent') {
-            const socket = process.env.SSH_AUTH_SOCK;
-            try {
-              const identities = await agentIdentities();
-              if (ws.readyState !== WebSocket.OPEN) return;
-              if (!identities.some(identity => identity.fingerprint === agent_fingerprint)) {
-                fail('The selected SSH agent identity is missing. Load it with ssh-add.');
-                return;
-              }
-              if (!socket) { fail('SSH agent unavailable. Start OpsDeck with access to SSH_AUTH_SOCK.'); return; }
-              agent = new SelectedAgent(socket, agent_fingerprint);
-            } catch {
-              if (ws.readyState === WebSocket.OPEN) fail('SSH agent unavailable. Start OpsDeck with access to SSH_AUTH_SOCK.');
-              return;
-            }
-          }
+          let authentication;
+          try { authentication = await sshAuthentication(connection, data.password); }
+          catch (error) { if (ws.readyState === WebSocket.OPEN) fail(error instanceof Error ? error.message : 'SSH authentication unavailable.'); return; }
+          if (ws.readyState !== WebSocket.OPEN) return;
           try {
             ssh.connect({
               host, port, username,
-              ...(agent ? { agent, authHandler: ['agent'] } : { password: data.password }),
+              ...authentication,
               readyTimeout: 15_000, keepaliveInterval: 20_000, keepaliveCountMax: 3,
               hostVerifier: (key: Buffer) => {
                 verified = keyFingerprint(key) === fingerprint;

@@ -112,6 +112,20 @@ The default Compose setup does not expose a host SSH agent to the container; pas
 
 Restarting OpsDeck restores the terminal window, not the live SSH process or scrollback. Reconnect using the selected authentication method; use a remote multiplexer if the shell itself needs to survive a disconnect. In the web version, sites that block embedding can be opened via **Open separately** or in the portable desktop app.
 
+## Remote files and Monaco
+
+Add an **SFTP**, **FTPS**, or **FTP** connection from the workspace library. SFTP uses the same password or selected SSH agent identity and strict host-key fingerprint verification as SSH. Existing SSH connections also have a **Files: name** button, so the terminal and SFTP browser can be used side by side.
+
+For FTPS, choose explicit TLS (usually port 21) or implicit TLS (usually port 990) and enter the provider's exact hostname. Control and file transfer connections are encrypted and the certificate must be valid and trusted. Plain FTP requires a warning acknowledgement each time: it sends credentials and files unencrypted. Prefer SFTP or FTPS.
+
+Connect, browse directories, and click a regular file to open it in a docked Monaco editor, the editor engine used by VS Code. PHP, JavaScript, TypeScript, HTML, CSS, JSON and other common text formats get highlighting. This is a text editor, not the full VS Code IDE or extension marketplace.
+
+**Save to server** or **Ctrl+S / Cmd+S** uploads the open file; typing never uploads automatically. OpsDeck checks that the remote content still matches what you opened, uploads a temporary file, then renames it into place. If another tool changes the file, Save refuses to overwrite it and keeps your draft: copy your changes before choosing **Reload**. This is optimistic conflict detection, not a remote filesystem lock. Keep a backup of important production files.
+
+**Upload new file** creates a file without replacing an existing one. Use the download arrow for binary files or backups. Text editing is limited to UTF-8 files up to 1 MiB, and uploads/downloads to 10 MiB per file. Symbolic links are not opened. UTF-8 BOMs and standard LF/CRLF line endings are preserved; mixed line endings may be normalized by Monaco. Servers must permit temporary-file creation and rename; SFTP preserves Unix permission bits, and FTP uses `SITE CHMOD` when the server reports them.
+
+Passwords and live file sessions stay in memory, never in SQLite or browser storage. File connections expire after 15 idle minutes; **Reconnect** keeps an open draft for saving after authentication. Drafts are not persisted across quitting OpsDeck. Closing a dirty tab, switching workspaces or loading a layout prompts before discarding edits. No automated tests contact live hosting accounts.
+
 ## Develop
 
 Use Node.js 24 LTS on Windows, Linux or macOS.
@@ -121,7 +135,7 @@ npm ci
 npm run dev:api
 ```
 
-In another terminal, run `npm run dev` and open [http://localhost:5173](http://localhost:5173). `npm run build` type-checks and builds the frontend; `npm start` serves it with the API. `npm test` runs the SQLite and SSH integration tests using local fixtures and requires `ssh-agent`, `ssh-add` and `ssh-keygen` on PATH. For direct Node runs, use `HOST`, `PORT` and `DATA_DIR` to override the defaults (`127.0.0.1`, `3000`, `data`).
+In another terminal, run `npm run dev` and open [http://localhost:5173](http://localhost:5173). `npm run build` type-checks and builds the frontend; `npm start` serves it with the API. `npm test` runs the SQLite, SSH and file transfer integration tests using local fixtures and requires `ssh-agent`, `ssh-add`, `ssh-keygen` and `openssl` on PATH. For direct Node runs, use `HOST`, `PORT` and `DATA_DIR` to override the defaults (`127.0.0.1`, `3000`, `data`).
 
 For Electron, run `npm run build:desktop` and `npm run start:desktop`. Run `npm run test:desktop` after building to exercise the workspace and top-level website pane using a local fixture. `npm run package:desktop` creates a ZIP in `release/` on macOS or Windows. The desktop backend uses loopback port `43139` and only accepts requests from its trusted workspace browser session.
 

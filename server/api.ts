@@ -76,12 +76,14 @@ export function api(db: DatabaseSync) {
         return { title, content };
       }
       const data = connectionInput.parse(body);
+      const ssh = data.type === 'SSH' || data.type === 'SFTP';
       return {
-        name: data.name, type: data.type, url: data.type === 'SSH' ? null : data.url,
-        host: data.type === 'SSH' ? data.host : null, port: data.type === 'SSH' ? data.port : null,
-        username: data.type === 'SSH' ? data.username : null, fingerprint: data.type === 'SSH' ? data.fingerprint : null,
-        auth_method: data.type === 'SSH' ? data.auth_method : 'password',
-        agent_fingerprint: data.type === 'SSH' && data.auth_method === 'agent' ? data.agent_fingerprint : null,
+        name: data.name, type: data.type, url: 'url' in data ? data.url : null,
+        host: 'host' in data ? data.host : null, port: 'port' in data ? data.port : null,
+        username: 'username' in data ? data.username : null, fingerprint: 'fingerprint' in data ? data.fingerprint : null,
+        auth_method: ssh ? data.auth_method : 'password',
+        agent_fingerprint: ssh && data.auth_method === 'agent' ? data.agent_fingerprint : null,
+        tls_mode: 'tls_mode' in data ? data.tls_mode : 'explicit',
       };
     }
     client.post(`/${table}`, (req, res) => {

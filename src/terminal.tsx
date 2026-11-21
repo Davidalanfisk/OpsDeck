@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
-import type { Connection } from '../shared/model.ts';
+import type { SshConnection } from '../shared/model.ts';
 import '@xterm/xterm/css/xterm.css';
 
-export function SshTerminal({ connection }: { connection: Extract<Connection, { type: 'SSH' }> }) {
+export function SshTerminal({ connection }: { connection: SshConnection }) {
   const mount = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>(null);
   const socket = useRef<WebSocket>(null);

@@ -36,6 +36,7 @@ export function openDb(directory: string) {
   const columns = db.prepare('PRAGMA table_info(connections)').all().map(column => column.name);
   if (!columns.includes('auth_method')) db.exec("ALTER TABLE connections ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'password'");
   if (!columns.includes('agent_fingerprint')) db.exec('ALTER TABLE connections ADD COLUMN agent_fingerprint TEXT');
+  if (!columns.includes('tls_mode')) db.exec("ALTER TABLE connections ADD COLUMN tls_mode TEXT NOT NULL DEFAULT 'explicit'");
   return db;
 }
 

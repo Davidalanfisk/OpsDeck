@@ -7,6 +7,7 @@ import { ZodError } from 'zod';
 import { api } from './api.ts';
 import { openDb } from './db.ts';
 import { attachSsh } from './ssh.ts';
+import { fileApi } from './files.ts';
 
 export function createOpsDeckServer({ directory, frontend, origin, authorize }: {
   directory: string; frontend: string; origin?: string; authorize?: (request: IncomingMessage) => boolean;
@@ -22,7 +23,7 @@ export function createOpsDeckServer({ directory, frontend, origin, authorize }: 
     res.set({ 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY' });
     if (authorize) {
       if (!authorize(req)) { res.sendStatus(403); return; }
-      res.set('Content-Security-Policy', `default-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${origin?.replace(/^http/, 'ws')}; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
+      res.set('Content-Security-Policy', `default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; worker-src 'self'; connect-src 'self' ${origin?.replace(/^http/, 'ws')}; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
     }
     next();
   });
@@ -33,7 +34,10 @@ export function createOpsDeckServer({ directory, frontend, origin, authorize }: 
       return;
     }
     next();
-  }, express.json({ limit: '2mb' }), api(db));
+  });
+  const files = fileApi(db);
+  app.use('/api/files', files.router);
+  app.use('/api', express.json({ limit: '2mb' }), api(db));
 
   app.use(express.static(frontend));
   app.get('/', (_req, res) => { res.sendFile(resolve(frontend, 'index.html')); });
@@ -50,6 +54,7 @@ export function createOpsDeckServer({ directory, frontend, origin, authorize }: 
   };
   app.use(handleError);
   const server = createServer(app);
+  server.on('close', () => files.close());
   attachSsh(server, db, allowsOrigin, authorize);
   return { server, db };
 }

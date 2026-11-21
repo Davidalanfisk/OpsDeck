@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { DockviewReact } from 'dockview';
-import type { DockviewApi, DockviewReadyEvent, SerializedDockview } from 'dockview';
+import { DockviewDefaultTab, DockviewReact } from 'dockview';
+import type { DockviewApi, DockviewReadyEvent, IDockviewPanelHeaderProps, SerializedDockview } from 'dockview';
+import { isFileConnection } from '../shared/model.ts';
 import type { Connection, Deck, Note, Workspace } from '../shared/model.ts';
 import { ConnectionEditor, NamedEditor } from './editors.tsx';
 import { flushNote, panels } from './panels.tsx';
 import { describe, readLocal, refreshDeck, request, useOps, writeLocal } from './state.ts';
+import { confirmFileDiscard } from './file-drafts.ts';
 import 'dockview/dist/styles/dockview.css';
 
 type Snapshot = { saved: SerializedDockview; raw: string };
 type Editor = { kind: 'connection'; item?: Connection } | { kind: 'note'; item?: Note } | { kind: 'workspace' };
+const connectionPanel = (connection: Connection) => connection.type === 'SSH' ? 'terminal' : isFileConnection(connection) ? 'files' : 'link';
+function SafeTab(props: IDockviewPanelHeaderProps) {
+  return <DockviewDefaultTab {...props} closeActionOverride={() => {
+    if (confirmFileDiscard(props.api.id)) props.api.close();
+  }} />;
+}
 
 function restore(dock: DockviewApi, layout: unknown) {
   if (!layout || typeof layout !== 'object' || !('grid' in layout) || !('panels' in layout)) {
@@ -108,10 +116,10 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
     };
   }, [dock, path, key]);
 
-  function openPanel(item: Connection | Note) {
+  function openPanel(item: Connection | Note, files = false) {
     if (!dock || !ready) return;
-    const kind = 'title' in item ? 'note' : item.type === 'SSH' ? 'terminal' : 'link';
-    const id = `item:${item.id}`;
+    const kind = 'title' in item ? 'note' : files ? 'files' : connectionPanel(item);
+    const id = `${kind === 'files' ? 'files' : 'item'}:${item.id}`;
     const existing = dock.getPanel(id);
     if (existing) { existing.api.setActive(); return; }
     dock.addPanel({
@@ -121,7 +129,7 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
   }
 
   const closeEditor = () => setEditor(undefined);
-  const closePanel = (id: string) => dock?.getPanel(`item:${id}`)?.api.close();
+  const closePanel = (id: string) => { dock?.getPanel(`item:${id}`)?.api.close(); dock?.getPanel(`files:${id}`)?.api.close(); };
   const q = filter.trim().toLowerCase();
   const matches = (value: string) => value.toLowerCase().includes(q);
   const setError = useOps.getState().setError;
@@ -139,7 +147,7 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
       <span className="spacer" />
       <span className="sync-state" role="status">{saveState}</span>
       <button disabled={!ready || !workspace.layout} onClick={() => {
-        if (!dock || !workspace.layout) return;
+        if (!dock || !workspace.layout || !confirmFileDiscard()) return;
         try { restore(dock, workspace.layout); }
         catch (error) { setError(`Saved layout could not be loaded: ${describe(error)}`); }
       }}>Load layout</button>
@@ -163,6 +171,8 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
           {connections.filter(item => matches(`${item.name} ${item.type}`)).map(item =>
             <Item key={item.id} name={item.name} detail={item.type} disabled={!ready}
               open={() => openPanel(item)} edit={() => setEditor({ kind: 'connection', item })} />)}
+          {connections.filter(item => item.type === 'SSH' && matches(`${item.name} ${item.type}`)).map(item =>
+            <button className="ssh-files-button" key={`files:${item.id}`} disabled={!ready} onClick={() => openPanel(item, true)}>Files: {item.name}</button>)}
           {!connections.length && <small className="muted">No connections yet.</small>}
           <div className="library-heading"><h2>Notes</h2><button aria-label="Add note" onClick={() => setEditor({ kind: 'note' })}>+</button></div>
           {notes.filter(item => matches(`${item.title} ${item.content}`)).map(item =>
@@ -173,20 +183,27 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
       </aside>
       <div className="dock-area">
         <DockviewReact className="dockview-theme-dark ops-dock" components={panels} onReady={onReady}
-          disableFloatingGroups={Boolean(window.opsDeckDesktop)} watermarkComponent={Empty} />
+          defaultTabComponent={SafeTab} disableFloatingGroups={Boolean(window.opsDeckDesktop)} watermarkComponent={Empty} />
       </div>
     </div>
     {editor?.kind === 'connection' && <ConnectionEditor value={editor.item} close={closeEditor}
       save={async data => {
         const item = editor.item;
+        if (item && !confirmFileDiscard(`files:${item.id}`)) throw new Error('Save the remote file or discard edits before changing this connection.');
         const saved = await request<Connection>(`${base}/connections${item ? `/${item.id}` : ''}`, item ? 'PUT' : 'POST', data);
-        if (item && (item.type === 'SSH') !== (saved.type === 'SSH')) {
-          if (dock?.getPanel(`item:${item.id}`)) { closePanel(item.id); openPanel(saved); }
-        } else dock?.getPanel(`item:${saved.id}`)?.api.setTitle(saved.name);
+        if (item && connectionPanel(item) !== connectionPanel(saved)) {
+          const open = dock?.getPanel(`item:${item.id}`) || dock?.getPanel(`files:${item.id}`);
+          closePanel(item.id);
+          if (open) openPanel(saved);
+        } else {
+          dock?.getPanel(`item:${saved.id}`)?.api.setTitle(saved.name);
+          dock?.getPanel(`files:${saved.id}`)?.api.setTitle(saved.name);
+        }
         await refreshDeck(client.id);
       }}
       remove={editor.item && (async () => {
         const item = editor.item!;
+        if (!confirmFileDiscard(`files:${item.id}`)) throw new Error('Save the remote file or discard edits before deleting this connection.');
         await request(`${base}/connections/${item.id}`, 'DELETE');
         closePanel(item.id);
         await refreshDeck(client.id);
