@@ -28,6 +28,50 @@ void app.whenReady().then(async () => {
   const cleanups: Array<() => Promise<void>> = [];
   const ftp = await ftpFixture({ after: cleanup => cleanups.push(cleanup) });
   ftp.directories.add('/public');
+  let websiteId = '';
+  let ftpId = '';
+  const toolResults: string[] = [];
+  const modelServer = createServer(async (request, response) => {
+    let input = '';
+    for await (const chunk of request) input += chunk;
+    const body = JSON.parse(input) as { messages: Array<{ role: string; content: string; tool_name?: string }>;
+      truncate: boolean; shift: boolean; options: { num_ctx: number } };
+    assert.equal(body.truncate, false);
+    assert.equal(body.shift, false);
+    assert.equal(body.options.num_ctx, 16_384);
+    const last = body.messages.at(-1);
+    const instruction = body.messages.findLast(message => message.role === 'user')?.content;
+    response.setHeader('Content-Type', 'application/json');
+    if (last?.role === 'tool') {
+      toolResults.push(last.content);
+      if (last.tool_name === 'read_file' && ['Edit remote file', 'Conflict remote file'].includes(instruction ?? '')) {
+        const file = JSON.parse(last.content) as { revision: string };
+        if (instruction === 'Conflict remote file') ftp.files.set('/agent.txt', Buffer.from('external edit'));
+        response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
+          { function: { name: 'write_file', arguments: { id: ftpId, path: '/agent.txt', content: 'agent edit', revision: file.revision } } },
+        ] } }));
+        return;
+      }
+      response.end(JSON.stringify({ message: { role: 'assistant', content: 'Fixture response complete.' } }));
+    } else {
+      const name = last?.content === 'Inspect website' ? 'inspect_website'
+        : ['Edit remote file', 'Conflict remote file'].includes(last?.content ?? '') ? 'read_file' : 'workspace';
+      response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
+        { function: { name, arguments: name === 'workspace' ? {} : name === 'inspect_website'
+          ? { id: websiteId } : { id: ftpId, path: '/agent.txt' } } },
+      ] } }));
+    }
+  });
+  modelServer.listen(0, '127.0.0.1');
+  await once(modelServer, 'listening');
+  const modelOrigin = `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}`;
+  const fakeOllama = {
+    status: () => ({ phase: 'ready' as const, detail: 'Fixture model ready', memoryBytes: 16 * 1024 ** 3,
+      recommended: 'qwen3:8b' as const, model: 'qwen3:8b' as const }),
+    setup: async (_model: unknown) => {},
+    origin: () => ({ origin: modelOrigin, model: 'qwen3:8b' as const }),
+    close: () => {},
+  };
   const site = createServer((request, response) => {
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
@@ -36,7 +80,9 @@ void app.whenReady().then(async () => {
       response.writeHead(302, { Location: '/login' }).end();
     } else {
       response.setHeader('Content-Type', 'text/html');
-      response.end(`<title>${request.headers.cookie?.includes('logged-in=yes') ? 'Logged in' : 'Missing cookie'}</title>`);
+      response.end(`<title>${request.headers.cookie?.includes('logged-in=yes') ? 'Logged in' : 'Missing cookie'}</title>
+        <h1>Local website fixture</h1><input type="password" aria-label="Private password"><input aria-label="Search">
+        <button onclick="this.textContent='Clicked fixture'">Fixture button</button>`);
     }
   });
   site.listen(0, '127.0.0.1');
@@ -45,7 +91,7 @@ void app.whenReady().then(async () => {
   const directory = join(temporary, 'workspace');
   let window: BrowserWindow | undefined;
   try {
-    const desktop = await startDesktop(directory, resolve('dist'));
+    const desktop = await startDesktop(directory, resolve('dist'), 43139, fakeOllama);
     window = desktop.window;
     const workspace = window.webContents;
     const rendererErrors: string[] = [];
@@ -72,6 +118,7 @@ void app.whenReady().then(async () => {
       return { id: client.id, website: website.id, socketOpened };
     })()`);
     assert.equal(result.socketOpened, true);
+    websiteId = result.website;
     await workspace.executeJavaScript(`localStorage.setItem('opsdeck:location', JSON.stringify({ clientId: ${JSON.stringify(result.id)} })); location.reload()`);
     const content = window.contentView;
     await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(b => b.title === 'Fixture website')?.click() ?? Boolean(document.querySelector('.desktop-browser-slot'))`));
@@ -133,9 +180,10 @@ void app.whenReady().then(async () => {
     assert.equal(await freshBrowser.executeJavaScript(`localStorage.getItem('profile-state')`), null);
     assert.equal(await freshBrowser.executeJavaScript(`sessionStorage.getItem('tab-state')`), null);
 
-    await workspace.executeJavaScript(`fetch('/api/clients/' + ${JSON.stringify(result.id)} + '/connections', {
+    ftpId = await workspace.executeJavaScript(`fetch('/api/clients/' + ${JSON.stringify(result.id)} + '/connections', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(${JSON.stringify(ftp.connection)})
-    }).then(() => location.reload())`);
+    }).then(response => response.json()).then(connection => connection.id)`);
+    await workspace.executeJavaScript('location.reload()');
     await until(() => workspace.executeJavaScript(`(() => {
       const button = document.querySelector('button[title="Local fixture"]');
       if (!button || button.disabled) return false;
@@ -226,10 +274,55 @@ void app.whenReady().then(async () => {
     await until(() => workspace.executeJavaScript(`!document.querySelector('[aria-label="Close /fixture.json"]').disabled`));
     await workspace.executeJavaScript(`window.confirm = () => true; document.querySelector('[aria-label="Close /fixture.json"]').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [role="tab"]').length === 1`));
-    console.log('Desktop: tabbed files, conflicts, draft guard, explicit save and browser retention verified');
+    ftp.files.set('/agent.txt', Buffer.from('original fixture'));
+    await workspace.executeJavaScript(`document.querySelector('button[title="Fixture website"]').click()`);
+    await until(() => freshPane.getVisible());
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Local agent').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.agent-setup [role="status"]')?.textContent === 'Fixture model ready'`));
+    const blocked = await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect').then(() => false, () => true)`);
+    assert.equal(blocked, true);
+    async function askAgent(prompt: string) {
+      const previous = await workspace.executeJavaScript(`document.querySelectorAll('.agent-message.assistant').length`);
+      await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').focus()`);
+      await workspace.insertText(prompt);
+      await workspace.executeJavaScript(`document.querySelector('.agent-input').requestSubmit()`);
+      await until(() => workspace.executeJavaScript(`document.querySelectorAll('.agent-message.assistant').length >= ${previous + 1}`));
+    }
+    await askAgent('List workspace');
+    assert.match(toolResults.at(-1) ?? '', /Fixture website/);
+    await askAgent('Edit remote file');
+    assert.equal(ftp.files.get('/agent.txt')?.toString(), 'agent edit');
+    await askAgent('Conflict remote file');
+    assert.equal(ftp.files.get('/agent.txt')?.toString(), 'external edit');
+    assert.match(toolResults.at(-1) ?? '', /remote file changed/i);
+    await workspace.executeJavaScript(`document.querySelector('.agent-consent input').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.agent-consent input').checked`));
+    await askAgent('Inspect website');
+    assert.match(toolResults.at(-1) ?? '', /Local website fixture/);
+    assert.doesNotMatch(toolResults.at(-1) ?? '', /Private password/);
+    const inspected = JSON.parse(await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect')`)) as {
+      controls: Array<{ index: number; label: string }>;
+    };
+    const search = inspected.controls.find(control => control.label === 'Search');
+    assert.ok(search);
+    await freshBrowser.executeJavaScript(`document.querySelector('[aria-label="Search"]').setAttribute('name', 'changed')`);
+    assert.equal(await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'type', ${search.index}, 'should not type').then(() => false, () => true)`), true);
+    await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect')`);
+    await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'type', ${search.index}, 'fixture query')`);
+    assert.equal(await freshBrowser.executeJavaScript(`document.querySelector('[aria-label="Search"]').value`), 'fixture query');
+    const afterType = JSON.parse(await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect')`)) as typeof inspected;
+    const button = afterType.controls.find(control => control.label === 'Fixture button');
+    assert.ok(button);
+    await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'click', ${button.index})`);
+    assert.equal(await freshBrowser.executeJavaScript(`document.querySelector('button').textContent`), 'Clicked fixture');
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Close agent"]').click()`);
+    await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-panel')`));
+    assert.equal(await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect').then(() => false, () => true)`), true);
+    console.log('Desktop: local agent, website opt-in, remote edits, draft safety and browser retention verified');
   } finally {
     window?.destroy();
     site.close();
+    modelServer.close();
     for (const cleanup of cleanups) await cleanup();
   }
 }).then(() => app.quit(), error => {

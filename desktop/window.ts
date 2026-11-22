@@ -2,9 +2,12 @@ import { BrowserWindow, WebContentsView, dialog, ipcMain, session, shell } from 
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents, WebPreferences } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import type { BrowserBounds, BrowserState } from '../shared/desktop.ts';
 import { createOpsDeckServer } from '../server/app.ts';
 import { browserProfiles } from './browser-profiles.ts';
+import { createOllama } from './ollama.ts';
+import { z } from 'zod';
 
 const secure: WebPreferences = {
   sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
@@ -30,7 +33,7 @@ function browserBounds(value: unknown, width: number, height: number): BrowserBo
   return { x, y, width: w, height: h };
 }
 
-export async function startDesktop(directory: string, frontend: string, port = 43139) {
+export async function startDesktop(directory: string, frontend: string, port = 43139, testOllama?: ReturnType<typeof createOllama>) {
   const host = `127.0.0.1:${port}`;
   const origin = `http://${host}`;
   const token = randomBytes(32).toString('hex');
@@ -64,6 +67,10 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     webPreferences: { ...secure, session: workspaceSession, preload: join(__dirname, 'preload.cjs') },
   });
   const workspace = window.webContents;
+  const ollama = testOllama ?? createOllama(directory);
+  let agentRequest: AbortController | undefined;
+  let websiteClient: string | null = null;
+  const websiteSnapshots = new Map<string, { url: string; controls: string[] }>();
   workspace.on('will-prevent-unload', event => {
     if (dialog.showMessageBoxSync(window, {
       type: 'warning', message: 'Discard unsaved remote file edits?',
@@ -93,7 +100,115 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   const profiles = new Set<string>();
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) =>
     event.sender === workspace && event.senderFrame === workspace.mainFrame && event.senderFrame.url === workspacePage;
+  const requireTrusted = (event: IpcMainInvokeEvent) => {
+    if (!trusted(event)) throw new Error('Untrusted agent request.');
+  };
+  ipcMain.handle('agent:status', event => { requireTrusted(event); return ollama.status(); });
+  ipcMain.handle('agent:setup', async (event, model: unknown) => { requireTrusted(event); await ollama.setup(model); });
+  ipcMain.handle('agent:chat', async (event, messages: unknown, tools: unknown) => {
+    requireTrusted(event);
+    if (agentRequest) throw new Error('An agent request is already running.');
+    const message = z.object({
+      role: z.enum(['system', 'user', 'assistant', 'tool']), content: z.string().max(100_000),
+      tool_name: z.string().max(80).optional(),
+      tool_calls: z.array(z.object({ function: z.object({ name: z.string().max(80), arguments: z.record(z.string(), z.unknown()) }) })).max(8).optional(),
+    });
+    const safeMessages = z.array(message).min(1).max(100).parse(messages);
+    const safeTools = z.array(z.object({
+      type: z.literal('function'),
+      function: z.object({ name: z.string().max(80), description: z.string().max(1000), parameters: z.object({
+        type: z.literal('object'), properties: z.record(z.string(), z.object({ type: z.string(), description: z.string() })),
+        required: z.array(z.string()),
+      }) }),
+    })).max(20).parse(tools);
+    if (JSON.stringify({ safeMessages, safeTools }).length > 500_000) throw new Error('The agent conversation is too large. Start a new session.');
+    const { origin: endpoint, model } = ollama.origin();
+    const controller = new AbortController();
+    agentRequest = controller;
+    try {
+      const response = await fetch(`${endpoint}/api/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model, messages: safeMessages, tools: safeTools, stream: false, think: false,
+          truncate: false, shift: false, options: { num_ctx: 16_384 } }),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10 * 60_000)]),
+      });
+      if (!response.ok) throw new Error(`Local model request failed (HTTP ${response.status}). The conversation may be too long; try New chat or shorter input.`);
+      if (!response.body) throw new Error('The local model returned an empty response.');
+      const chunks: Buffer[] = [];
+      let size = 0;
+      for await (const chunk of Readable.fromWeb(response.body as import('node:stream/web').ReadableStream)) {
+        size += chunk.length;
+        if (size > 512_000) throw new Error('The local model response was too large.');
+        chunks.push(Buffer.from(chunk));
+      }
+      let body: unknown;
+      try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { throw new Error('The local model returned invalid JSON.'); }
+      const result = z.object({ message }).parse(body).message;
+      if (result.role !== 'assistant') throw new Error('The local model returned an invalid response.');
+      return result;
+    } finally { if (agentRequest === controller) agentRequest = undefined; }
+  });
+  ipcMain.on('agent:cancel', event => { if (trusted(event)) agentRequest?.abort(); });
+  ipcMain.handle('agent:website-access', (event, clientId: unknown) => {
+    requireTrusted(event);
+    if (clientId !== null && (typeof clientId !== 'string' || !idPattern.test(clientId) ||
+      !db.prepare('SELECT id FROM clients WHERE id = ?').get(clientId))) throw new Error('Client not found.');
+    websiteClient = clientId;
+    websiteSnapshots.clear();
+  });
+  ipcMain.handle('agent:website', async (event, id: unknown, action: unknown, index: unknown, value: unknown) => {
+    requireTrusted(event);
+    if (typeof id !== 'string' || !idPattern.test(id)) throw new Error('Invalid website pane.');
+    const pane = panes.get(id);
+    if (!websiteClient || !pane?.attached || pane.clientId !== websiteClient || !pane.view.getVisible()) {
+      throw new Error('Enable website access for this session and show the requested website pane.');
+    }
+    if (!['inspect', 'click', 'type'].includes(String(action))) throw new Error('Invalid website action.');
+    if (action !== 'inspect' && (!Number.isSafeInteger(index) || Number(index) < 0 || Number(index) > 999)) throw new Error('Invalid control number.');
+    if (action === 'type' && (typeof value !== 'string' || value.length > 2000)) throw new Error('Invalid input.');
+    const snapshot = websiteSnapshots.get(id);
+    if (action !== 'inspect' && (!snapshot || snapshot.url !== pane.view.webContents.getURL() || !snapshot.controls[Number(index)])) {
+      throw new Error('Inspect the current website before interacting with it.');
+    }
+    const script = `(() => {
+      const action = ${JSON.stringify(action)}, index = ${JSON.stringify(index)}, value = ${JSON.stringify(value)};
+      const expected = ${JSON.stringify(snapshot?.controls[Number(index)])};
+      const visible = el => { const r = el.getBoundingClientRect(); const s = getComputedStyle(el); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
+      const safe = el => !el.matches('input[type=password],input[type=hidden],input[autocomplete*="password"],input[autocomplete="one-time-code"],input[autocomplete^="cc-"]') &&
+        (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) ||
+          !/password|passcode|otp|verification|secret|token|credit.card/i.test([el.name, el.id, el.placeholder, el.autocomplete, el.getAttribute('aria-label')].join(' ')));
+      const controls = Array.from(document.querySelectorAll('a,button,input,textarea,select,[role=button]')).filter(el => visible(el) && safe(el)).slice(0, 1000);
+      const signature = el => JSON.stringify([el.tagName, el.getAttribute('type'), el.getAttribute('id'), el.getAttribute('name'),
+        el.getAttribute('role'), el.getAttribute('href'), el.getAttribute('aria-label'), (el.innerText || '').slice(0, 160)]);
+      if (action === 'inspect') return JSON.stringify({ origin: location.origin, text: (document.body?.innerText || '').slice(0, 12000),
+        controls: controls.map((el, i) => ({ index: i, type: el.tagName.toLowerCase(), label: (el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.innerText || el.getAttribute('name') || '').slice(0, 160), signature: signature(el) })).slice(0, 150) });
+      const el = controls[index];
+      if (!el || signature(el) !== expected) throw new Error('Control changed. Inspect the page again.');
+      if (action === 'click') { el.click(); return 'Clicked control ' + index; }
+      if (!(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) || el.disabled || el.readOnly || !safe(el)) throw new Error('This input cannot be edited by the agent.');
+      const setter = Object.getOwnPropertyDescriptor(el instanceof HTMLInputElement ? HTMLInputElement.prototype : HTMLTextAreaElement.prototype, 'value')?.set;
+      if (!setter) throw new Error('Input is unavailable.');
+      setter.call(el, value); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true }));
+      return 'Updated control ' + index;
+    })()`;
+    const url = pane.view.webContents.getURL();
+    let result: string;
+    try { result = String(await pane.view.webContents.executeJavaScript(script)); }
+    catch { throw new Error('Website action failed. Inspect the page again and check the selected control.'); }
+    if (action === 'inspect') {
+      if (pane.view.webContents.getURL() !== url || websiteClient !== pane.clientId) throw new Error('Website changed during inspection.');
+      const data = z.object({ origin: z.string(), text: z.string(), controls: z.array(z.object({
+        index: z.number(), type: z.string(), label: z.string(), signature: z.string(),
+      })).max(150) }).parse(JSON.parse(result));
+      websiteSnapshots.set(id, { url, controls: data.controls.map(control => control.signature) });
+      return JSON.stringify({ ...data, controls: data.controls.map(({ signature: _signature, ...control }) => control) });
+    }
+    websiteSnapshots.delete(id);
+    return result;
+  });
   function close(id: string) {
+    websiteSnapshots.delete(id);
     const pane = panes.get(id);
     if (!pane) return;
     panes.delete(id);
@@ -102,6 +217,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     if (!pane.view.webContents.isDestroyed()) pane.view.webContents.close();
   }
   function release(id: string) {
+    websiteSnapshots.delete(id);
     pending.delete(id);
     const pane = panes.get(id);
     if (!pane?.attached) return;
@@ -248,11 +364,15 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   });
   workspace.on('did-start-navigation', event => {
     if (event.isMainFrame && !event.isSameDocument) {
+      websiteClient = null;
+      websiteSnapshots.clear();
       pending.clear();
       for (const id of [...panes.keys()]) release(id);
     }
   });
   window.on('closed', () => {
+    agentRequest?.abort();
+    ollama.close();
     pending.clear();
     for (const [id, pane] of panes) {
       if (pane.attached) browserActivity.markUsed(pane.clientId);
@@ -261,6 +381,12 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     clearInterval(profileTimer);
     ipcMain.removeHandler('browser:open');
     ipcMain.removeHandler('browser:action');
+    ipcMain.removeHandler('agent:status');
+    ipcMain.removeHandler('agent:setup');
+    ipcMain.removeHandler('agent:chat');
+    ipcMain.removeHandler('agent:website-access');
+    ipcMain.removeHandler('agent:website');
+    ipcMain.removeAllListeners('agent:cancel');
     ipcMain.removeAllListeners('browser:layout');
     ipcMain.removeAllListeners('browser:release');
     workspaceSession.webRequest.onBeforeSendHeaders(null);

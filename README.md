@@ -20,7 +20,28 @@ Open a website connection from the library to load it as a top-level page in a d
 
 Recently used tabs resume where you left off when you return to a workspace while OpsDeck is running. OpsDeck clears a client's cookies, website storage, and cache after 30 days without open website panes, on the next launch or during an hourly check. Sites can still expire their own logins sooner. Tab-only state can be lost when OpsDeck quits or needs to free an idle tab.
 
-To work with an AI assistant, use a desktop agent such as ChatGPT or Claude with desktop controls, if your version supports them. OpsDeck does not load Chrome extensions or give agents special access. See the [OpsDeck workspace skill](skills/opsdeck-workspace/SKILL.md) for UI guidance and boundaries.
+You can also use an external desktop agent such as ChatGPT or Claude with desktop controls, if your version supports them. OpsDeck does not load Chrome extensions or provide those external agents with special API access. See the [OpsDeck workspace skill](skills/opsdeck-workspace/SKILL.md) for UI guidance and boundaries.
+
+### Local Ollama agent
+
+In the desktop app, open a client workspace and choose **Local agent**. Pick a model and select **Set up local model**. OpsDeck downloads a pinned official Ollama runtime, verifies its SHA-256 checksum, and downloads the selected local model. The recommendation uses system RAM as a rough guide, not a guarantee of speed; GPU availability and free memory also matter. The runtime needs about 230 MB on Apple silicon or 1.6 GB on Windows x64, plus extraction space and 2.5–9.3 GB for a model. Windows GPU support depends on the hardware and drivers; CPU inference may be slow. The runtime and models live in the per-user desktop workspace directory; no administrator installation is required, although device security policies may block execution. Downloads require internet access.
+
+The agent starts its own loopback-only Ollama service with cloud features disabled. Prompts and tool results go to that local service; downloads come from Ollama's distribution services. Other local processes with access to the machine may be able to access the local service. Conversations and website permission last only while the agent panel is open and are not saved by OpsDeck. Restart the app and choose **Set up local model** again to start the service; an already downloaded runtime and model are reused.
+
+The agent requests a 16,384-token context without automatic history truncation. If a conversation or tool result exceeds it, start **New chat** or use shorter input. Context memory adds to the model's RAM requirements.
+
+**The agent can execute commands and modify remote files or notes without asking again.** It uses only connections in the current client, and SSH and file connections must already be opened and authenticated by the user. It can list and open panes, read and update notes, read terminal output and send single-line SSH commands, and list, read, create or update remote files. Existing remote-file updates require a matching revision and cannot overwrite a file open in the editor. Agent editing of files and notes over 30,000 characters is disabled; use the normal editor instead. SSH output is recent terminal text, not proof that a command completed.
+
+Website access is **off by default** and must be enabled for each agent session. When enabled, the agent can read visible page text and interact with numbered controls in visible website panes for that client. This is text/DOM access, not visual screenshot understanding, and does not cover every site or iframe. Common password and one-time-code inputs are filtered, but detection is not guaranteed and pages may display other sensitive information. Malicious content can manipulate the model into running commands, making changes or sending workspace data to a website; the system prompt cannot reliably prevent this. Local models can also make mistakes; use trusted sites, test accounts and backups, and inspect results. **Stop** halts further agent steps, but cannot undo or reliably cancel an action already sent.
+
+For source installs, the same setup can be started from a terminal:
+
+```sh
+npm run setup:ollama
+# Optional model selection: npm run setup:ollama -- qwen3:8b
+```
+
+The script exits after installation; launch the desktop app and start the chosen model from **Local agent**. The web/Docker version does not expose the desktop agent.
 
 Desktop data is stored per user, not in the extracted ZIP: `~/Library/Application Support/OpsDeck/workspace` on macOS and `%APPDATA%\OpsDeck\workspace` on Windows. To move an existing macOS native install, stop both versions, then run this **before the first desktop launch** (adjust the source path if needed):
 
@@ -75,10 +96,10 @@ Install Docker for your platform and start its engine:
 | macOS | Install [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/), choosing the Apple silicon or Intel download for your Mac. Start Docker Desktop and run the commands below in Terminal. |
 | Linux | Install [Docker Engine](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) for your distribution. Run the commands below as a user with access to the Docker daemon. |
 
-Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.4.0` release with Git:
+Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.5.0` release with Git:
 
 ```sh
-git clone --branch v0.4.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+git clone --branch v0.5.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
 cd OpsDeck
 ```
 
@@ -140,3 +161,7 @@ In another terminal, run `npm run dev` and open [http://localhost:5173](http://l
 For Electron, run `npm run build:desktop` and `npm run start:desktop`. Run `npm run test:desktop` after building to exercise the workspace and top-level website pane using a local fixture. `npm run package:desktop` creates a ZIP in `release/` on macOS or Windows. The desktop backend uses loopback port `43139` and only accepts requests from its trusted workspace browser session.
 
 Window implementations are registered in `src/panels.tsx`. Dockview layouts reference stored item IDs, while SQLite, the JSON API and the SSH transport remain separate from the window renderer.
+
+## Wishlist
+
+Explore Google Workspace sign-in and integrations such as Calendar, Drive and Chat notifications, subject to Google and administrator permissions.

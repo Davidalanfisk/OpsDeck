@@ -75,6 +75,22 @@ test('named layout and latest session persist independently and stay scoped to t
   finally { reopened.close(); }
 });
 
+test('note updates can reject stale revisions without changing existing update behavior', async t => {
+  const { call, createClient, dir } = await fixture(t);
+  const client = await createClient('Notes fixture');
+  const base = `/clients/${client.id}/notes`;
+  const { data: note } = await call(base, 'POST', { title: 'Runbook', content: 'original' });
+  const stale = await call(`${base}/${note.id}`, 'PUT', { title: note.title, content: 'stale edit', if_updated_at: 'stale' });
+  assert.equal(stale.status, 409);
+  assert.equal((await call(`/clients/${client.id}`)).data.notes[0].content, 'original');
+  const db = openDb(dir);
+  try { db.prepare('UPDATE notes SET content = ? WHERE id = ?').run('changed with same timestamp', note.id); }
+  finally { db.close(); }
+  assert.equal((await call(`${base}/${note.id}`, 'PUT', { title: note.title, content: 'stale edit', if_updated_at: note.updated_at, if_content: 'original', if_title: note.title })).status, 409);
+  assert.equal((await call(`${base}/${note.id}`, 'PUT', { title: note.title, content: 'safe edit', if_updated_at: note.updated_at, if_content: 'changed with same timestamp', if_title: note.title })).status, 200);
+  assert.equal((await call(`${base}/${note.id}`, 'PUT', { title: note.title, content: 'regular edit' })).status, 200);
+});
+
 test('WebSocket opens a password-authenticated SSH PTY, sends input and resizes', { timeout: 15_000 }, async t => {
   const { origin, call, createClient } = await fixture(t);
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' } });

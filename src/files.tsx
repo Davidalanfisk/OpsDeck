@@ -7,6 +7,7 @@ import type { RemoteEntry, RemoteText } from '../shared/files.ts';
 import { confirmFileDiscard, setFileDirty } from './file-drafts.ts';
 import { describe, request, RequestError, useOps } from './state.ts';
 import { Icon } from './icons.tsx';
+import { registerAgentFiles } from './agent-sessions.ts';
 
 const Monaco = lazy(() => import('./monaco.tsx').then(module => ({ default: module.Monaco })));
 const join = (path: string, name: string) => `${path.replace(/\/$/, '')}/${name}`;
@@ -32,6 +33,10 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
   const dirty = files.some(isDirty);
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
+  useEffect(() => {
+    if (!session) return;
+    return registerAgentFiles(connection.id, { session, openPaths: new Set(files.map(item => item.path)) });
+  }, [connection.id, session, files]);
   const id = `files:${connection.id}`;
   setFileDirty(id, dirty);
   useEffect(() => {

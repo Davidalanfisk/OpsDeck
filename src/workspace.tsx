@@ -8,6 +8,7 @@ import { flushNote, panels } from './panels.tsx';
 import { describe, readLocal, refreshDeck, request, useOps, writeLocal } from './state.ts';
 import { confirmFileDiscard } from './file-drafts.ts';
 import { Icon } from './icons.tsx';
+import { Agent } from './agent.tsx';
 import 'dockview/dist/styles/dockview.css';
 
 type Snapshot = { saved: SerializedDockview; raw: string };
@@ -70,6 +71,7 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
   const [saveState, setSaveState] = useState('Restoring…');
   const [libraryOpen, setLibraryOpen] = useState(true);
   const [dock, setDock] = useState<DockviewApi>();
+  const [agentOpen, setAgentOpen] = useState(false);
   const latest = useRef<Snapshot>(undefined);
   const base = `/clients/${client.id}`;
   const path = `${base}/workspaces/${workspace.id}`;
@@ -174,6 +176,7 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
       <button onClick={() => setEditor({ kind: 'workspace' })}>+ Workspace</button>
       <span className="spacer" />
       <span className="sync-state" role="status">{saveState}</span>
+      {window.opsDeckDesktop && <button disabled={!ready} aria-pressed={agentOpen} onClick={() => setAgentOpen(value => !value)}>Local agent</button>}
       <button disabled={!ready || !workspace.layout} onClick={() => {
         if (!dock || !workspace.layout || !confirmFileDiscard()) return;
         try { restore(dock, workspace.layout); }
@@ -214,6 +217,7 @@ export function WorkspaceView({ deck, workspace }: { deck: Deck; workspace: Work
           defaultTabComponent={SafeTab} rightHeaderActionsComponent={WindowActions}
           disableFloatingGroups={Boolean(window.opsDeckDesktop)} watermarkComponent={Empty} />
       </div>
+      {agentOpen && dock && window.opsDeckDesktop && <Agent deck={deck} dock={dock} openPanel={openPanel} close={() => setAgentOpen(false)} />}
     </div>
     {editor?.kind === 'connection' && <ConnectionEditor value={editor.item} close={closeEditor}
       save={async data => {

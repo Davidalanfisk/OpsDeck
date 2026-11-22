@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { clientInput, connectionInput, layoutInput, noteInput, workspaceInput } from '../shared/model.ts';
 import { now } from './db.ts';
 import { agentIdentities } from './ssh-agent.ts';
+import { z } from 'zod';
 
 function workspace(row: Record<string, SQLOutputValue>) {
   const { layout_json, ...rest } = row;
@@ -98,10 +99,22 @@ export function api(db: DatabaseSync) {
     });
     client.put(`/${table}/:itemId`, (req, res) => {
       const data = values(req.body);
+      const expected = table === 'notes' && req.body?.if_updated_at !== undefined
+        ? z.string().min(1).max(80).parse(req.body.if_updated_at) : undefined;
+      const expectedContent = table === 'notes' && req.body?.if_content !== undefined
+        ? z.string().max(250_000).parse(req.body.if_content) : undefined;
+      const expectedTitle = table === 'notes' && req.body?.if_title !== undefined
+        ? z.string().max(120).parse(req.body.if_title) : undefined;
       const row = db.prepare(`UPDATE ${table} SET ${Object.keys(data).map(key => `${key} = ?`).join(', ')}, updated_at = ?
-                              WHERE client_id = ? AND id = ? RETURNING *`)
-        .get(...Object.values(data), now(), res.locals.client.id, req.params.itemId);
-      if (!row) { res.status(404).json({ error: 'Item not found' }); return; }
+                              WHERE client_id = ? AND id = ? ${expected ? 'AND updated_at = ?' : ''}
+                              ${expectedContent !== undefined ? 'AND content = ?' : ''} ${expectedTitle !== undefined ? 'AND title = ?' : ''} RETURNING *`)
+        .get(...Object.values(data), now(), res.locals.client.id, req.params.itemId, ...(expected ? [expected] : []),
+          ...(expectedContent !== undefined ? [expectedContent] : []), ...(expectedTitle !== undefined ? [expectedTitle] : []));
+      if (!row) {
+        const existing = (expected || expectedContent !== undefined || expectedTitle !== undefined) &&
+          db.prepare(`SELECT id FROM ${table} WHERE client_id = ? AND id = ?`).get(res.locals.client.id, req.params.itemId);
+        res.status(existing ? 409 : 404).json({ error: existing ? 'The note changed. Read it again before updating.' : 'Item not found' }); return;
+      }
       res.json(row);
     });
     client.delete(`/${table}/:itemId`, (req, res) => {

@@ -3,12 +3,14 @@ import type { FormEvent } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { SshConnection } from '../shared/model.ts';
+import { registerAgentTerminal } from './agent-sessions.ts';
 import '@xterm/xterm/css/xterm.css';
 
 export function SshTerminal({ connection }: { connection: SshConnection }) {
   const mount = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal>(null);
   const socket = useRef<WebSocket>(null);
+  const connected = useRef(false);
   const [status, setStatus] = useState('Disconnected');
   const [busy, setBusy] = useState(false);
   useEffect(() => {
@@ -22,6 +24,18 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
     term.loadAddon(fit);
     term.open(element);
     terminal.current = term;
+    const unregister = registerAgentTerminal(connection.id, {
+      read: () => {
+        const buffer = term.buffer.active;
+        const lines: string[] = [];
+        for (let i = Math.max(0, buffer.length - 100); i < buffer.length; i++) lines.push(buffer.getLine(i)?.translateToString(true) ?? '');
+        return lines.join('\n').slice(-12000);
+      },
+      send: command => {
+        if (!connected.current || socket.current?.readyState !== WebSocket.OPEN) throw new Error('The SSH terminal is not connected.');
+        socket.current.send(JSON.stringify({ type: 'input', data: `${command}\r` }));
+      },
+    });
     term.writeln(connection.auth_method === 'agent' ? 'OpsDeck SSH — connect using the selected agent identity.' : 'OpsDeck SSH — enter your password to connect.');
     const send = (data: object) => {
       if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(data));
@@ -42,6 +56,8 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
     observer.observe(element);
     return () => {
       const ws = socket.current;
+      unregister();
+      connected.current = false;
       socket.current = null;
       ws?.close();
       terminal.current = null;
@@ -71,7 +87,7 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
       if (socket.current !== ws) return;
       if (event.data instanceof ArrayBuffer) { term.write(new Uint8Array(event.data)); return; }
       const data = JSON.parse(event.data);
-      if (data.state === 'connected') { setStatus('Connected'); term.focus(); }
+      if (data.state === 'connected') { connected.current = true; setStatus('Connected'); term.focus(); }
       if (data.state === 'error') { failed = true; setStatus(data.detail); term.writeln(`\r\n${data.detail}`); }
     };
     ws.onerror = () => {
@@ -82,6 +98,7 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
     ws.onclose = () => {
       if (socket.current !== ws) return;
       socket.current = null;
+      connected.current = false;
       setBusy(false);
       if (!failed) setStatus('Disconnected');
       term.writeln('\r\n[SSH session closed]');
