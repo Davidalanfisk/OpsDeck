@@ -6,7 +6,7 @@ import { ollamaModels } from '../shared/ollama.ts';
 import type { AgentMessage, AgentTool, OllamaModel, OllamaStatus } from '../shared/ollama.ts';
 import { fileCreate, fileList, fileRead, fileWrite, terminalRead, terminalSend } from './agent-sessions.ts';
 import { flushNote } from './panels.tsx';
-import { describe, readLocal, refreshDeck, request } from './state.ts';
+import { describe, readLocal, refreshDeck, request, useOps } from './state.ts';
 
 const system: AgentMessage = {
   role: 'system',
@@ -20,8 +20,9 @@ const makeTool = (name: string, description: string, fields: Record<string, stri
 const tools: AgentTool[] = [
   makeTool('workspace', 'List current client connections, notes and open panes.', {}),
   makeTool('open_pane', 'Open a connection, note, or the files pane for a connection.', { id: 'Connection or note id', kind: 'connection, note, or files' }),
-  makeTool('read_note', 'Read a note in this client.', { id: 'Note id' }),
-  makeTool('write_note', 'Replace a note in this client using its revision from read_note. Close the note pane first.', { id: 'Note id', content: 'Full new note content', revision: 'updated_at returned by read_note' }),
+  makeTool('create_note', 'Create a new note in this client. The server assigns its ID; do not invent one.', { title: 'Title for the new note', content: 'Full note content' }),
+  makeTool('read_note', 'Read an existing note in this client, using an ID returned by workspace or create_note.', { id: 'Existing note id' }),
+  makeTool('write_note', 'Replace an existing note using its ID and revision from read_note. For a new note use create_note instead. Close the note pane first.', { id: 'Existing note id', content: 'Full new note content', revision: 'updated_at returned by read_note' }),
   makeTool('read_terminal', 'Read recent output from an open SSH terminal.', { id: 'SSH connection id' }),
   makeTool('send_command', 'Run one shell command in an already-connected SSH terminal.', { id: 'SSH connection id', command: 'Single shell command' }),
   makeTool('list_files', 'List an absolute remote directory using an already-connected file pane.', { id: 'File connection id', path: 'Absolute directory path' }),
@@ -46,6 +47,8 @@ export function Agent({ deck, dock, openPanel, close }: {
   const [status, setStatus] = useState<OllamaStatus>();
   const [model, setModel] = useState<OllamaModel>();
   const [website, setWebsite] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(true);
+  const [acknowledged, setAcknowledged] = useState(false);
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const conversation = useRef<AgentMessage[]>([system]);
   const noteSnapshots = useRef(new Map<string, { content: string; title: string; revision: string }>());
@@ -61,7 +64,7 @@ export function Agent({ deck, dock, openPanel, close }: {
   useEffect(() => {
     alive.current = true;
     const update = () => void bridge.ollamaStatus().then(next => {
-      if (alive.current) { setStatus(next); setModel(current => current ?? next.recommended); }
+      if (alive.current) { setStatus(next); setModel(current => current ?? next.model ?? next.recommended); }
     }).catch(error => { if (alive.current) setError(describe(error)); });
     update();
     const timer = setInterval(update, 1000);
@@ -83,13 +86,23 @@ export function Agent({ deck, dock, openPanel, close }: {
     return value;
   }
   async function execute(name: string, args: Record<string, unknown>) {
-    const deck = currentDeck.current;
+    const latest = useOps.getState().deck;
+    const deck = latest?.client.id === currentDeck.current.client.id ? latest : currentDeck.current;
     if (name === 'workspace') return {
       client: { id: deck.client.id, name: deck.client.name },
       connections: deck.connections.map(item => ({ id: item.id, name: item.name, type: item.type })),
       notes: deck.notes.map(item => ({ id: item.id, title: item.title })),
       openPanes: dock.panels.map(panel => ({ id: panel.id, title: panel.title })),
     };
+    if (name === 'create_note') {
+      const title = text(args, 'title', 120).trim();
+      if (!title) throw new Error('A note title is required.');
+      const content = text(args, 'content', 30_000);
+      const created = await request<Note>(`/clients/${deck.client.id}/notes`, 'POST', { title, content });
+      try { await refreshDeck(deck.client.id); }
+      catch (error) { throw new Error(`Note created with ID ${created.id}, but the workspace could not refresh: ${describe(error)}. Do not retry creation.`); }
+      return { id: created.id, title: created.title, updated_at: created.updated_at };
+    }
     const id = text(args, 'id', 80);
     const connection = deck.connections.find(item => item.id === id);
     const note = deck.notes.find(item => item.id === id);
@@ -100,6 +113,9 @@ export function Agent({ deck, dock, openPanel, close }: {
       else if (kind === 'files' && connection && ['SSH', 'SFTP', 'FTP', 'FTPS'].includes(connection.type)) openPanel(connection, true);
       else throw new Error('Item or pane type not found in this client.');
       return 'Pane opened. The user must authenticate if needed.';
+    }
+    if ((name === 'read_note' || name === 'write_note') && !note) {
+      throw new Error('Note not found in this client. Use workspace to find an existing note, or create_note to create one.');
     }
     if (name === 'read_note' && note) {
       const draft = readLocal<{ content: string }>(`note:${id}`);
@@ -151,7 +167,7 @@ export function Agent({ deck, dock, openPanel, close }: {
   async function submit(event: FormEvent) {
     event.preventDefault();
     const prompt = input.trim();
-    if (!prompt || busy || !modelReady) return;
+    if (!prompt || busy || !modelReady || !acknowledged) return;
     setInput(''); setError(''); setBusy(true); stopped.current = false;
     add('user', prompt);
     const history: AgentMessage[] = [...conversation.current, { role: 'user', content: prompt }];
@@ -189,7 +205,9 @@ export function Agent({ deck, dock, openPanel, close }: {
   return <aside className="agent-panel" aria-label="Local agent">
     <div className="agent-heading"><strong>Local agent</strong><span className="spacer" />
       <button disabled={busy} onClick={() => { setMessages([]); conversation.current = [system]; noteSnapshots.current.clear(); }}>New chat</button>
+      <button type="button" aria-label="Agent settings" aria-expanded={settingsOpen} title="Agent settings" disabled={!acknowledged} onClick={() => setSettingsOpen(open => !open)}>⚙</button>
       <button onClick={close} aria-label="Close agent">×</button></div>
+    {settingsOpen && <>
     <p className="agent-warning">Actions can change remote systems without further approval. Malicious pages or files may trick the model into running commands or sending workspace data elsewhere. Use trusted systems and review the action log.</p>
     <div className="agent-setup">
       <label>Local model <select value={model ?? ''} disabled={busy || !status || ['downloading', 'extracting', 'starting', 'pulling'].includes(status.phase)}
@@ -210,14 +228,27 @@ export function Agent({ deck, dock, openPanel, close }: {
       void bridge.agentWebsiteAccess(enabled ? deck.client.id : null).then(() => setWebsite(enabled)).catch(error => setError(describe(error)));
     }} /> Allow this session to read and interact with visible website panes for this client</label>
     <small>Only enable website access if you trust the pages. Logged-in content may be read by the model. Common password and one-time-code fields are filtered, but detection is not guaranteed.</small>
+    <button type="button" disabled={!modelReady} onClick={() => { setAcknowledged(true); setSettingsOpen(false); }}>
+      {acknowledged ? 'Done' : 'I understand, start chatting'}
+    </button>
+    </>}
+    {!settingsOpen && <small className="agent-summary">{status?.phase === 'ready' ? `Model: ${status.model}` : status?.detail}
+      {website ? ' · Website access on' : ' · Website access off'}</small>}
     <div className="agent-messages" aria-live="polite">
-      {messages.map((message, index) => <div key={index} className={`agent-message ${message.role}`}><strong>{message.role}</strong><pre>{message.content}</pre></div>)}
+      {messages.map((message, index) => <div key={index} className={`agent-message ${message.role}`}><strong>{message.role === 'user' ? 'You' : message.role === 'assistant' ? 'AI' : message.role}</strong><pre>{message.content}</pre></div>)}
+      {busy && <div className="agent-thinking" role="status"><span className="agent-spinner" aria-hidden="true" /> Working…</div>}
     </div>
     {error && <p role="alert" className="error">{error}</p>}
     <form className="agent-input" onSubmit={event => void submit(event)}>
-      <textarea aria-label="Agent instruction" value={input} onChange={event => setInput(event.target.value)} placeholder="Ask the local agent…" maxLength={10000} />
+      <textarea aria-label="Agent instruction" value={input} onChange={event => setInput(event.target.value)} placeholder="Ask the local agent…" maxLength={10000}
+        onKeyDown={event => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            if (!event.repeat) event.currentTarget.form?.requestSubmit();
+          }
+        }} />
       {busy ? <button type="button" onClick={() => { stopped.current = true; bridge.agentCancel(); }}>Stop</button>
-        : <button className="primary" disabled={!modelReady || !input.trim()}>Send</button>}
+        : <button className="primary" disabled={!modelReady || !acknowledged || !input.trim()}>Send</button>}
     </form>
   </aside>;
 }

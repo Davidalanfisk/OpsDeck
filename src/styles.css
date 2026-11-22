@@ -138,11 +138,19 @@ small, .muted { color: var(--muted); }
 .agent-setup select { width: 100%; }
 .agent-consent { display: flex; align-items: start; gap: 6px; font-size: .8rem; }
 .agent-consent input { flex: none; }
-.agent-messages { flex: 1; min-height: 100px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
-.agent-message { border: 1px solid var(--line); border-radius: 6px; padding: 6px; font-size: .8rem; }
-.agent-message strong { color: var(--muted); text-transform: uppercase; }
+.agent-summary { overflow-wrap: anywhere; }
+.agent-messages { flex: 1; min-height: 100px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.agent-message { max-width: 92%; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: .85rem; }
+.agent-message.user { align-self: flex-end; background: #43366b; border-color: #675596; }
+.agent-message.assistant { align-self: flex-start; background: #222b3c; }
+.agent-message.action, .agent-message.error { align-self: flex-start; background: #1b2230; }
+.agent-message strong { color: var(--muted); font-size: .7rem; text-transform: uppercase; }
 .agent-message pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 0 0; font: inherit; }
 .agent-message.error { color: #ffb1b8; }
+.agent-thinking { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .8rem; }
+.agent-spinner { width: 13px; height: 13px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: agent-spin .8s linear infinite; }
+@keyframes agent-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .agent-spinner { animation: none; } }
 .agent-input { display: flex; gap: 5px; }
 .agent-input textarea { flex: 1; min-width: 0; resize: vertical; }
 .ssh-files-button { width: 100%; overflow: hidden; text-overflow: ellipsis; margin-block: 3px; text-align: left; }

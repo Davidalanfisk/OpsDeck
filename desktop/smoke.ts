@@ -35,15 +35,26 @@ void app.whenReady().then(async () => {
     let input = '';
     for await (const chunk of request) input += chunk;
     const body = JSON.parse(input) as { messages: Array<{ role: string; content: string; tool_name?: string }>;
+      tools: Array<{ function: { name: string; parameters: { properties: Record<string, unknown> } } }>;
       truncate: boolean; shift: boolean; options: { num_ctx: number } };
     assert.equal(body.truncate, false);
     assert.equal(body.shift, false);
     assert.equal(body.options.num_ctx, 16_384);
+    const createNote = body.tools.find(tool => tool.function.name === 'create_note');
+    assert.ok(createNote);
+    assert.deepEqual(Object.keys(createNote.function.parameters.properties).sort(), ['content', 'title']);
     const last = body.messages.at(-1);
     const instruction = body.messages.findLast(message => message.role === 'user')?.content;
     response.setHeader('Content-Type', 'application/json');
     if (last?.role === 'tool') {
       toolResults.push(last.content);
+      if (last.tool_name === 'create_note' && instruction === 'Create note') {
+        const note = JSON.parse(last.content) as { id: string };
+        response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
+          { function: { name: 'read_note', arguments: { id: note.id } } },
+        ] } }));
+        return;
+      }
       if (last.tool_name === 'read_file' && ['Edit remote file', 'Conflict remote file'].includes(instruction ?? '')) {
         const file = JSON.parse(last.content) as { revision: string };
         if (instruction === 'Conflict remote file') ftp.files.set('/agent.txt', Buffer.from('external edit'));
@@ -54,11 +65,16 @@ void app.whenReady().then(async () => {
       }
       response.end(JSON.stringify({ message: { role: 'assistant', content: 'Fixture response complete.' } }));
     } else {
+      if (last?.content === 'List\nworkspace') await delay(350);
       const name = last?.content === 'Inspect website' ? 'inspect_website'
-        : ['Edit remote file', 'Conflict remote file'].includes(last?.content ?? '') ? 'read_file' : 'workspace';
+        : ['Edit remote file', 'Conflict remote file'].includes(last?.content ?? '') ? 'read_file'
+        : last?.content === 'Create note' ? 'create_note'
+        : last?.content === 'Missing note' ? 'write_note' : 'workspace';
       response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
         { function: { name, arguments: name === 'workspace' ? {} : name === 'inspect_website'
-          ? { id: websiteId } : { id: ftpId, path: '/agent.txt' } } },
+          ? { id: websiteId } : name === 'create_note' ? { title: 'Agent fixture note', content: 'Created by fixture' }
+          : name === 'write_note' ? { id: 'invented-note', content: 'test', revision: 'invented' }
+          : { id: ftpId, path: '/agent.txt' } } },
       ] } }));
     }
   });
@@ -279,6 +295,9 @@ void app.whenReady().then(async () => {
     await until(() => freshPane.getVisible());
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Local agent').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-setup [role="status"]')?.textContent === 'Fixture model ready'`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-input button').disabled`), true);
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'I understand, start chatting').click()`);
+    assert.equal(await workspace.executeJavaScript(`!document.querySelector('.agent-warning') && !document.querySelector('.agent-setup')`), true);
     const blocked = await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect').then(() => false, () => true)`);
     assert.equal(blocked, true);
     async function askAgent(prompt: string) {
@@ -288,15 +307,39 @@ void app.whenReady().then(async () => {
       await workspace.executeJavaScript(`document.querySelector('.agent-input').requestSubmit()`);
       await until(() => workspace.executeJavaScript(`document.querySelectorAll('.agent-message.assistant').length >= ${previous + 1}`));
     }
-    await askAgent('List workspace');
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').focus()`);
+    await workspace.insertText('List');
+    workspace.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: ['shift'] });
+    workspace.sendInputEvent({ type: 'char', keyCode: '\r', modifiers: ['shift'] });
+    workspace.sendInputEvent({ type: 'keyUp', keyCode: 'Enter', modifiers: ['shift'] });
+    await workspace.insertText('workspace');
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').value`), 'List\nworkspace');
+    workspace.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
+    workspace.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' });
+    await until(() => workspace.executeJavaScript(`document.querySelector('.agent-thinking')?.textContent.includes('Working')`));
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.agent-message.assistant'))`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-message.user strong').textContent`), 'You');
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-message.assistant strong').textContent`), 'AI');
     assert.match(toolResults.at(-1) ?? '', /Fixture website/);
+    await askAgent('Create note');
+    const created = JSON.parse(toolResults.at(-2) ?? '{}') as { id: string; title: string };
+    assert.match(created.id, /^[\da-f-]{36}$/);
+    assert.match(toolResults.at(-1) ?? '', /Created by fixture/);
+    const notes = await workspace.executeJavaScript(`fetch('/api/clients/${result.id}').then(response => response.json()).then(deck => deck.notes)`) as Array<{ id: string; title: string; content: string }>;
+    assert.ok(notes.some(note => note.id === created.id && note.title === 'Agent fixture note' && note.content === 'Created by fixture'));
+    await askAgent('Missing note');
+    assert.match(toolResults.at(-1) ?? '', /Note not found.*create_note/);
     await askAgent('Edit remote file');
     assert.equal(ftp.files.get('/agent.txt')?.toString(), 'agent edit');
     await askAgent('Conflict remote file');
     assert.equal(ftp.files.get('/agent.txt')?.toString(), 'external edit');
     assert.match(toolResults.at(-1) ?? '', /remote file changed/i);
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent settings"]').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.agent-consent input'))`));
     await workspace.executeJavaScript(`document.querySelector('.agent-consent input').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-consent input').checked`));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'Done').click()`);
+    assert.match(await workspace.executeJavaScript(`document.querySelector('.agent-summary').textContent`), /Website access on/);
     await askAgent('Inspect website');
     assert.match(toolResults.at(-1) ?? '', /Local website fixture/);
     assert.doesNotMatch(toolResults.at(-1) ?? '', /Private password/);
