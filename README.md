@@ -6,7 +6,7 @@ Organize work by client, build layouts around the tools you use, and return to t
 
 When you want a hand, the optional **local AI assistant** can inspect the current workspace, work with notes and remote files, read terminal output and send commands. With your permission it can also interact with visible website panes. Review its actions: it can make real changes and can make mistakes.
 
-OpsDeck is a self-hosted, single-operator application, not a multi-user access-control system.
+OpsDeck is a single-operator desktop application, not a multi-user access-control system.
 
 ## See it in action
 
@@ -14,7 +14,13 @@ OpsDeck is a self-hosted, single-operator application, not a multi-user access-c
 | --- | --- |
 | ![OpsDeck client dashboard](docs/screenshots/clients.png) | ![OpsDeck docked client workspace](docs/screenshots/workspace.png) |
 
-Screenshots use demonstration data.
+| Remote file browser | Monaco editor |
+| --- | --- |
+| ![Browse remote files and folders](docs/screenshots/file-browser.png) | ![Edit a remote file in Monaco](docs/screenshots/monaco-editor.png) |
+
+![Local assistant creating a note and showing its actions](docs/screenshots/ai-workflow.png)
+
+Screenshots use demonstration data; the assistant example uses a scripted demo model response.
 
 ## What you can do
 
@@ -39,29 +45,9 @@ The builds are not vendor-signed or notarized. Windows SmartScreen or macOS Gate
 
 Desktop data is stored per user, outside the extracted app: `~/Library/Application Support/OpsDeck/workspace` on macOS and `%APPDATA%\OpsDeck\workspace` on Windows. Keep a backup of this data.
 
-To copy an existing macOS native installation's database, stop both versions and run the following **before the first desktop launch**, adjusting the source path:
-
-```sh
-mkdir -p "$HOME/Library/Application Support/OpsDeck/workspace"
-sqlite3 "$HOME/Downloads/OpsDeck-main/data/opsdeck.sqlite" \
-  ".backup '$HOME/Library/Application Support/OpsDeck/workspace/opsdeck.sqlite'"
-```
-
-This copies clients, notes, connections and layouts, not website sessions.
-
-### Run from source
+### Build and run the desktop app from source
 
 Install [Node.js 24 LTS](https://nodejs.org/en/download), then from the cloned or extracted source directory:
-
-```sh
-npm ci
-npm run build
-npm start
-```
-
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Stop the foreground server with `Ctrl+C`; SQLite remains in `data/opsdeck.sqlite`. On Windows, use `npm.cmd` if PowerShell blocks the npm script shim.
-
-For the Electron desktop app from source:
 
 ```sh
 npm ci
@@ -69,21 +55,7 @@ npm run build:desktop
 npm run start:desktop
 ```
 
-The desktop app has top-level website panes and the local assistant. The browser-based app does not expose the desktop assistant, and sites that prohibit iframe embedding need **Open separately** or the desktop app.
-
-### Docker Compose
-
-Install and start [Docker Desktop](https://docs.docker.com/desktop/) on Windows or macOS, or [Docker Engine and the Compose plugin](https://docs.docker.com/engine/install/) on Linux. From the source directory:
-
-```sh
-docker compose up --build -d
-```
-
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). Check `docker compose logs opsdeck` if needed. Data is kept in the `workspace` named volume; `docker compose down` preserves it, while `docker compose down -v` deletes it.
-
-Optional `.env` settings are `OPSDECK_BIND` (default `127.0.0.1`), `OPSDECK_PORT` (default `3000`) and `OPSDECK_ORIGIN` (for an explicit public origin behind a reverse proxy).
-
-> **Keep the web server private.** OpsDeck has no login or multi-user permissions. Anyone who can reach it can read and modify client data and initiate SSH connections from the server. Keep the loopback binding, or use an authenticated HTTPS access boundary with WebSocket forwarding.
+On Windows, use `npm.cmd` if PowerShell blocks the npm script shim. To build a portable desktop ZIP, run `npm run package:desktop`.
 
 ## Websites and sessions
 
@@ -93,7 +65,7 @@ Recent tabs resume while OpsDeck is running. Cookies, website storage and cache 
 
 ## SSH and remote files
 
-Add an SSH connection with the host, port, username and a **trusted SHA256 server host-key fingerprint**, obtained independently from the server administrator or console. Choose password or SSH agent authentication. The OpsDeck server or container must be able to reach the remote host. Restarting OpsDeck restores the terminal pane, not the live shell or scrollback; reconnect, or use a remote multiplexer for a persistent shell.
+Add an SSH connection with the host, port, username and a **trusted SHA256 server host-key fingerprint**, obtained independently from the server administrator or console. Choose password or SSH agent authentication. Your computer must be able to reach the remote host. Restarting OpsDeck restores the terminal pane, not the live shell or scrollback; reconnect, or use a remote multiplexer for a persistent shell.
 
 For agent authentication, load your existing key in the terminal that starts OpsDeck:
 
@@ -105,8 +77,6 @@ ssh-add -l -E sha256
 
 Replace the example key path with your private key. `ssh-add` prompts for its passphrase; OpsDeck does not store it. Select the corresponding **agent identity fingerprint** in the connection form: it is different from the server host-key fingerprint. If needed, start an agent with `eval "$(ssh-agent -s)"`, load the key and start OpsDeck from that same terminal. A packaged macOS app can be launched from that terminal via its `OpsDeck.app/Contents/MacOS/OpsDeck` executable.
 
-The default Docker configuration does not forward the host SSH agent. Forwarding a socket and setting `SSH_AUTH_SOCK` inside the container requires explicit configuration and grants the container access to agent signing operations. Password connections do not need an agent.
-
 Add an **SFTP**, **FTPS** or **FTP** connection, or open **Files** for an existing SSH connection. SFTP uses SSH authentication and host-key verification. FTPS requires a valid trusted certificate and supports explicit or implicit TLS. **Plain FTP transmits passwords and files unencrypted** and requires acknowledgement on every connection; prefer SFTP or FTPS.
 
 Browse folders, create a **New file** or **New directory**, upload a new file, or download files. Open UTF-8 text files in the docked Monaco editor; syntax highlighting is available for common languages. **Save to server** or `Ctrl+S` / `Cmd+S` uploads the active draft. Remote saves check the original revision and refuse detected conflicts, retaining the draft. This is optimistic conflict detection, not a lock: concurrent creates can race with the final rename. Keep backups of production files.
@@ -115,7 +85,7 @@ Text editing is limited to 1 MiB and transfers to 10 MiB per file; symbolic link
 
 ### Saved connection passwords
 
-Passwords are **not saved by default**. Desktop users can opt in to secure storage after successful authentication. Encryption uses Windows DPAPI, macOS Keychain or a supported Linux secret service; Linux's basic-text fallback is rejected. Windows protects against other users but not necessarily other applications running as the same user. The web and Docker versions cannot save passwords; enter them each time.
+Passwords are **not saved by default**. You can opt in to secure storage after successful authentication. Encryption uses Windows DPAPI, macOS Keychain or a supported Linux secret service; Linux's basic-text fallback is rejected. Windows protects against other users but not necessarily other applications running as the same user.
 
 An SSH connection shares its saved password between the terminal and Files browser; either form can forget it. Changing connection identity or authentication settings prevents reuse of the old saved password. SSH-agent connections do not use saved passwords. Saved credentials do not make plain FTP encrypted.
 
@@ -133,7 +103,7 @@ Website access is **off by default** and must be enabled for each agent session.
 
 Conversations are saved per client in SQLite, including prompts, tool arguments and results. **They are not encrypted by OpsDeck** and can contain sensitive data. Use **New chat** and the conversation selector to reopen or continue them. Failed saves and concurrent edits are reported rather than silently overwritten. Conversation requests are limited to 64 MiB, and the model has a 16,384-token context without automatic history truncation; use a new chat or shorter input when needed.
 
-For source installs, `npm run setup:ollama` can prepare the runtime and default model from a terminal; `npm run setup:ollama -- qwen3:8b` selects a model. Start the model from the desktop assistant afterward. The web/Docker app does not expose the local assistant. Image generation is not currently built in.
+For source installs, `npm run setup:ollama` can prepare the runtime and default model from a terminal; `npm run setup:ollama -- qwen3:8b` selects a model. Start the model from the desktop assistant afterward. Image generation is not currently built in.
 
 ## Updates
 
@@ -141,18 +111,11 @@ For source installs, `npm run setup:ollama` can prepare the runtime and default 
 
 **macOS Apple silicon source installs:** launch the first updater-capable build with `npm run start:desktop`. Under **Updates**, choose **Download and build update**, then **Restart and install**. The app preserves a Node/npm runtime and builds in a separate version directory; the previous version is restored if the new one fails its startup check. Save remote drafts first: restarting disconnects sessions and interrupts agent actions. For future launches use `~/Library/Application Support/OpsDeck/source-updates/OpsDeck.command` or the original source launcher. Startup checks do not verify every feature.
 
-Both update paths verify SHA-256 checksums against the public [update feed](https://github.com/Davidalanfisk/OpsDeck-updates). Checksums detect corruption but are **not publisher signatures**; trust the feed, release assets and their maintainers. Source updates execute downloaded code and dependency scripts as your user. Docker and other source platforms do not support in-app updates.
+Both update paths verify SHA-256 checksums against the public [update feed](https://github.com/Davidalanfisk/OpsDeck-updates). Checksums detect corruption but are **not publisher signatures**; trust the feed, release assets and their maintainers. Source updates execute downloaded code and dependency scripts as your user. In-app updates are limited to the platforms described above.
 
 ## Development and releases
 
-Use Node.js 24 LTS:
-
-```sh
-npm ci
-npm run dev:api
-```
-
-In another terminal run `npm run dev`, then open [http://localhost:5173](http://localhost:5173). `npm run build` type-checks and builds the frontend; `npm test` runs tests with local fixtures and requires `ssh-agent`, `ssh-add`, `ssh-keygen` and `openssl` on PATH. Direct server runs accept `HOST`, `PORT` and `DATA_DIR` (defaults: `127.0.0.1`, `3000`, `data`).
+Use Node.js 24 LTS. `npm run build` type-checks and builds the frontend; `npm test` runs tests with local fixtures and requires `ssh-agent`, `ssh-add`, `ssh-keygen` and `openssl` on PATH.
 
 After `npm run build:desktop`, `npm run test:desktop` exercises the desktop workspace and requires a working graphical display. `npm run test:desktop:portable` exercises the updater dialog and desktop bridge with fixture downloads; it does not install a ZIP. `npm run package:desktop` creates a portable ZIP in `release/`. The desktop backend listens on loopback port `43139` and accepts requests only from its trusted workspace browser session.
 
