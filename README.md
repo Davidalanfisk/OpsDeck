@@ -30,7 +30,7 @@ The agent starts its own loopback-only Ollama service with cloud features disabl
 
 The agent requests a 16,384-token context without automatic history truncation. If a conversation or tool result exceeds it, start **New chat** or use shorter input. Context memory adds to the model's RAM requirements.
 
-**The agent can execute commands and modify remote files or notes without asking again.** It uses only connections in the current client, and SSH and file connections must already be opened and authenticated by the user. It can list and open panes, create, read and update notes, read terminal output and send single-line SSH commands, and list, read, create or update remote files. Existing remote-file updates require a matching revision and cannot overwrite a file open in the editor. Agent editing of files and notes over 30,000 characters is disabled; use the normal editor instead. SSH output is recent terminal text, not proof that a command completed.
+**The agent can execute commands and modify remote files or notes without asking again.** It uses only connections in the current client, and SSH and file connections must already be opened and authenticated by the user. It can list and open panes, create website connections and notes, read and update notes, read terminal output and send single-line SSH commands, and list, read, create or update remote files. Existing remote-file updates require a matching revision and cannot overwrite a file open in the editor. Agent editing of files and notes over 30,000 characters is disabled; use the normal editor instead. SSH output is recent terminal text, not proof that a command completed.
 
 Website access is **off by default** and must be enabled for each agent session. When enabled, the agent can read visible page text and interact with numbered controls in visible website panes for that client. This is text/DOM access, not visual screenshot understanding, and does not cover every site or iframe. Common password and one-time-code inputs are filtered, but detection is not guaranteed and pages may display other sensitive information. Malicious content can manipulate the model into running commands, making changes or sending workspace data to a website; the system prompt cannot reliably prevent this. Local models can also make mistakes; use trusted sites, test accounts and backups, and inspect results. **Stop** halts further agent steps, but cannot undo or reliably cancel an action already sent.
 
@@ -96,10 +96,10 @@ Install Docker for your platform and start its engine:
 | macOS | Install [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/), choosing the Apple silicon or Intel download for your Mac. Start Docker Desktop and run the commands below in Terminal. |
 | Linux | Install [Docker Engine](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) for your distribution. Run the commands below as a user with access to the Docker daemon. |
 
-Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.5.1` release with Git:
+Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.5.2` release with Git:
 
 ```sh
-git clone --branch v0.5.1 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+git clone --branch v0.5.2 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
 cd OpsDeck
 ```
 

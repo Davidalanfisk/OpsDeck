@@ -43,11 +43,19 @@ void app.whenReady().then(async () => {
     const createNote = body.tools.find(tool => tool.function.name === 'create_note');
     assert.ok(createNote);
     assert.deepEqual(Object.keys(createNote.function.parameters.properties).sort(), ['content', 'title']);
+    assert.ok(body.tools.find(tool => tool.function.name === 'create_website'));
     const last = body.messages.at(-1);
     const instruction = body.messages.findLast(message => message.role === 'user')?.content;
     response.setHeader('Content-Type', 'application/json');
     if (last?.role === 'tool') {
       toolResults.push(last.content);
+      if (last.tool_name === 'create_website') {
+        const created = JSON.parse(last.content) as { id: string };
+        response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
+          { function: { name: 'open_pane', arguments: { id: created.id, kind: 'connection' } } },
+        ] } }));
+        return;
+      }
       if (last.tool_name === 'create_note' && instruction === 'Create note') {
         const note = JSON.parse(last.content) as { id: string };
         response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
@@ -69,10 +77,12 @@ void app.whenReady().then(async () => {
       const name = last?.content === 'Inspect website' ? 'inspect_website'
         : ['Edit remote file', 'Conflict remote file'].includes(last?.content ?? '') ? 'read_file'
         : last?.content === 'Create note' ? 'create_note'
+        : last?.content === 'Create BBC website' ? 'create_website'
         : last?.content === 'Missing note' ? 'write_note' : 'workspace';
       response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
         { function: { name, arguments: name === 'workspace' ? {} : name === 'inspect_website'
           ? { id: websiteId } : name === 'create_note' ? { title: 'Agent fixture note', content: 'Created by fixture' }
+          : name === 'create_website' ? { name: 'Fixture website agent', url: `${siteUrl}/agent` }
           : name === 'write_note' ? { id: 'invented-note', content: 'test', revision: 'invented' }
           : { id: ftpId, path: '/agent.txt' } } },
       ] } }));
@@ -329,6 +339,13 @@ void app.whenReady().then(async () => {
     assert.ok(notes.some(note => note.id === created.id && note.title === 'Agent fixture note' && note.content === 'Created by fixture'));
     await askAgent('Missing note');
     assert.match(toolResults.at(-1) ?? '', /Note not found.*create_note/);
+    await askAgent('Create BBC website');
+    assert.match(toolResults.at(-2) ?? '', /Fixture website agent/);
+    assert.match(toolResults.at(-1) ?? '', /Pane opened/);
+    const agentWebsite = await workspace.executeJavaScript(`fetch('/api/clients/${result.id}').then(response => response.json()).then(deck => deck.connections.find(connection => connection.name === 'Fixture website agent'))`) as { id: string; url: string };
+    assert.equal(agentWebsite.url, `${siteUrl}/agent`);
+    await workspace.executeJavaScript(`document.querySelector('button[title="Fixture website"]').click()`);
+    await until(() => freshPane.getVisible());
     await askAgent('Edit remote file');
     assert.equal(ftp.files.get('/agent.txt')?.toString(), 'agent edit');
     await askAgent('Conflict remote file');
