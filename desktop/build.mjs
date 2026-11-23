@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: ['desktop/main.ts', 'desktop/preload.ts', 'desktop/smoke.ts', 'desktop/update-helper.ts'],
+  entryPoints: ['desktop/main.ts', 'desktop/preload.ts', 'desktop/smoke.ts', 'desktop/portable-smoke.ts', 'desktop/update-helper.ts'],
   outdir: 'desktop-dist',
   outExtension: { '.js': '.cjs' },
   bundle: true,

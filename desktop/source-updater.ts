@@ -43,12 +43,12 @@ export function parseRelease(data: unknown): Release {
 }
 
 export function createSourceUpdater(root: string, source: string, current: string, supported: boolean) {
-  let state: UpdateStatus = { phase: 'idle', current, supported, detail: supported ? 'Check for updates' : 'Source updates support macOS Apple silicon source installs only.' };
+  let state: UpdateStatus = { phase: 'idle', current, supported, mode: 'source', detail: supported ? 'Check for updates' : 'Updates support macOS Apple silicon source installs and macOS arm64 or Windows x64 portable builds only.' };
   let release: Release | undefined;
   let running = false;
   let task: Promise<void> | undefined;
   const shutdown = new AbortController();
-  const set = (phase: UpdateStatus['phase'], detail: string, latest = release?.version) => { state = { phase, current, supported, detail, latest }; };
+  const set = (phase: UpdateStatus['phase'], detail: string, latest = release?.version) => { state = { phase, current, supported, mode: 'source', detail, latest }; };
   async function run(binary: string, args: string[], cwd: string, env = process.env) {
     await new Promise<void>((resolve, reject) => {
       const child = spawn(binary, args, { cwd, env, stdio: 'ignore', detached: process.platform !== 'win32' });

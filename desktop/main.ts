@@ -1,8 +1,9 @@
-import { app, dialog } from 'electron';
+import { app, dialog, shell } from 'electron';
 import { join } from 'node:path';
 import { readFile, rm, writeFile } from 'node:fs/promises';
 import { startDesktop } from './window.ts';
 import { createSourceUpdater } from './source-updater.ts';
+import { createPortableUpdater } from './portable-updater.ts';
 
 app.setName('OpsDeck');
 if (!app.requestSingleInstanceLock()) {
@@ -11,8 +12,12 @@ if (!app.requestSingleInstanceLock()) {
   app.on('window-all-closed', () => app.quit());
   void app.whenReady().then(async () => {
     const source = app.getAppPath();
-    const updater = createSourceUpdater(join(app.getPath('userData'), 'source-updates'), source, app.getVersion(),
-      !app.isPackaged && process.platform === 'darwin' && process.arch === 'arm64');
+    const portablePlatform = process.platform === 'darwin' && process.arch === 'arm64' ? 'mac-arm64'
+      : process.platform === 'win32' && process.arch === 'x64' ? 'win-x64' : undefined;
+    const updater = app.isPackaged && portablePlatform
+      ? createPortableUpdater(join(app.getPath('userData'), 'portable-updates'), app.getVersion(), portablePlatform, path => shell.showItemInFolder(path))
+      : createSourceUpdater(join(app.getPath('userData'), 'source-updates'), source, app.getVersion(),
+        !app.isPackaged && process.platform === 'darwin' && process.arch === 'arm64');
     await updater.initialize().catch(error => dialog.showErrorBox('OpsDeck updater setup failed',
       `${error instanceof Error ? error.message : 'Unknown error'}\nOpsDeck will still open; automatic updates may not work.`));
     const { window } = await startDesktop(join(app.getPath('userData'), 'workspace'), join(source, 'dist'), 43139, undefined, updater);

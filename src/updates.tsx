@@ -43,13 +43,15 @@ export function Updates() {
       <button disabled={busy || !status?.supported || ['checking', 'installing', 'ready'].includes(status?.phase ?? '')}
         onClick={() => void action(bridge.updateCheck)}>Check for updates</button>
       {status?.phase === 'available' && <>
-        <small>The update downloads dependencies and builds separately. Restart disconnects SSH/file sessions; save remote drafts first.</small>
-        <button disabled={busy} onClick={() => void action(bridge.updatePrepare)}>Download and build update</button>
+        <small>{status.mode === 'portable'
+          ? 'Downloads a verified ZIP. You will install it manually alongside your current copy.'
+          : 'The update downloads dependencies and builds separately. Restart disconnects SSH/file sessions; save remote drafts first.'}</small>
+        <button disabled={busy} onClick={() => void action(bridge.updatePrepare)}>{status.mode === 'portable' ? 'Download verified update' : 'Download and build update'}</button>
       </>}
       {status?.phase === 'ready' && <button disabled={busy} onClick={() => void action(async () => {
-        for (const note of useOps.getState().deck?.notes ?? []) await flushNote(note);
+        if (status.mode !== 'portable') for (const note of useOps.getState().deck?.notes ?? []) await flushNote(note);
         await bridge.updateRestart();
-      })}>Restart and install</button>}
+      })}>{status.mode === 'portable' ? 'Show downloaded ZIP' : 'Restart and install'}</button>}
     </dialog>
   </div>;
 }

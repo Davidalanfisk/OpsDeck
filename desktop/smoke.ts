@@ -11,8 +11,8 @@ import { app, BrowserWindow, dialog } from 'electron';
 import { startDesktop } from './window.ts';
 import { ftpFixture, text } from '../test/fixtures/remote.mjs';
 
-const temporary = join(process.cwd(), `.opsdeck-desktop-${randomUUID()}`);
-mkdirSync(temporary);
+const temporary = process.env.OPSDECK_SMOKE_PROFILE ?? join(process.cwd(), `.opsdeck-desktop-${randomUUID()}`);
+mkdirSync(temporary, { recursive: true });
 app.setPath('userData', temporary);
 const deadline = setTimeout(() => { console.error('Desktop smoke test timed out'); app.exit(1); }, 40_000);
 
@@ -179,7 +179,16 @@ void app.whenReady().then(async () => {
     const pane = await until(() => content.children.find(view => 'webContents' in view && view.webContents !== workspace));
     assert.ok('webContents' in pane);
     const browser = pane.webContents as Electron.WebContents;
-    await until(() => browser.getTitle() === 'Logged in' && pane.getVisible() && pane.getBounds().width > 0);
+    try {
+      await until(() => browser.getTitle() === 'Logged in' && pane.getVisible() && pane.getBounds().width > 0);
+    } catch (error) {
+      const frames = await workspace.executeJavaScript(`Promise.race([
+        new Promise(resolve => requestAnimationFrame(() => resolve(true))),
+        new Promise(resolve => setTimeout(() => resolve(false), 500))
+      ])`);
+      if (!frames) throw new Error('Desktop smoke requires a working graphical display: renderer animation frames stopped.');
+      throw error;
+    }
     assert.equal(browser.getURL(), `${siteUrl}/login`);
     assert.equal(await browser.executeJavaScript('self === top && typeof require === "undefined" && !window.opsDeckDesktop'), true);
     assert.equal(await browser.executeJavaScript(`fetch(${JSON.stringify(`${desktop.origin}/api/clients`)}).then(() => false, () => true)`), true);
@@ -483,6 +492,7 @@ void app.whenReady().then(async () => {
 
 app.on('quit', () => {
   clearTimeout(deadline);
+  if (process.env.OPSDECK_SMOKE_PROFILE) return;
   try { rmSync(temporary, { recursive: true, force: true, maxRetries: 6, retryDelay: 100 }); }
   catch { console.warn('Could not remove the temporary desktop profile.'); }
 });

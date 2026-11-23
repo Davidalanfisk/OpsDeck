@@ -2,6 +2,7 @@ export type UpdateStatus = {
   phase: 'idle' | 'checking' | 'available' | 'current' | 'installing' | 'ready' | 'error';
   current: string;
   supported: boolean;
+  mode?: 'source' | 'portable';
   latest?: string;
   detail: string;
 };

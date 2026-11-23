@@ -31,6 +31,7 @@ jobs:
       - run: npm ci
       - run: npm run build:desktop
       - run: npm run test:desktop
+      - run: npm run test:desktop:portable
       - run: npx --no-install electron-builder --${{ matrix.platform }} --${{ matrix.arch }} --publish never
       - uses: actions/upload-artifact@v6
         with:
