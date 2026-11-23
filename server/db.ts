@@ -17,9 +17,18 @@ export function openDb(directory: string) {
       name TEXT NOT NULL, type TEXT NOT NULL, url TEXT, host TEXT, port INTEGER,
       username TEXT, fingerprint TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS file_credentials (
+      connection_id TEXT PRIMARY KEY REFERENCES connections(id) ON DELETE CASCADE,
+      settings_hash TEXT NOT NULL, encrypted BLOB NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS notes (
       id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
       title TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS agent_conversations (
+      client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+      id TEXT NOT NULL, conversation_json TEXT NOT NULL, version INTEGER NOT NULL,
+      PRIMARY KEY (client_id, id)
     ) STRICT;
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,

@@ -8,9 +8,11 @@ import { api } from './api.ts';
 import { openDb } from './db.ts';
 import { attachSsh } from './ssh.ts';
 import { fileApi } from './files.ts';
+import type { FileCredentialStorage } from './credentials.ts';
 
-export function createOpsDeckServer({ directory, frontend, origin, authorize }: {
+export function createOpsDeckServer({ directory, frontend, origin, authorize, fileCredentialStorage }: {
   directory: string; frontend: string; origin?: string; authorize?: (request: IncomingMessage) => boolean;
+  fileCredentialStorage?: FileCredentialStorage;
 }) {
   function allowsOrigin(requestOrigin?: string, host?: string) {
     if (!requestOrigin) return false;
@@ -35,8 +37,9 @@ export function createOpsDeckServer({ directory, frontend, origin, authorize }: 
     }
     next();
   });
-  const files = fileApi(db);
+  const files = fileApi(db, fileCredentialStorage);
   app.use('/api/files', files.router);
+  app.use('/api/clients/:clientId/agent-conversations', express.json({ limit: '64mb' }));
   app.use('/api', express.json({ limit: '2mb' }), api(db));
 
   app.use(express.static(frontend));
@@ -55,6 +58,6 @@ export function createOpsDeckServer({ directory, frontend, origin, authorize }: 
   app.use(handleError);
   const server = createServer(app);
   server.on('close', () => files.close());
-  attachSsh(server, db, allowsOrigin, authorize);
+  attachSsh(server, db, allowsOrigin, authorize, fileCredentialStorage);
   return { server, db };
 }

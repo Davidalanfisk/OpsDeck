@@ -3,7 +3,12 @@ import type { RemoteText } from '../shared/files.ts';
 import { request } from './state.ts';
 
 type TerminalAccess = { read: () => string; send: (command: string) => void };
-type FileAccess = { session: string; openPaths: Set<string> };
+type EditorSnapshot = { content: string; revision: string };
+type FileAccess = {
+  session: string;
+  readOpen: (path: string) => EditorSnapshot | undefined;
+  applyOpen: (path: string, expected: EditorSnapshot, content: string) => void;
+};
 const terminals = new Map<string, TerminalAccess>();
 const fileSessions = new Map<string, FileAccess>();
 
@@ -32,16 +37,36 @@ function fileSession(id: string) {
   if (!session) throw new Error('Open and connect this file browser first.');
   return session;
 }
+function canonicalPath(path: string) {
+  if (!path.startsWith('/') || /[\0\r\n]/.test(path)) throw new Error('Use an absolute remote path.');
+  const parts: string[] = [];
+  for (const part of path.split('/')) {
+    if (!part || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return `/${parts.join('/')}`;
+}
 export async function fileList(id: string, path: string) {
   return request(`/files/${fileSession(id).session}/list`, 'POST', { path });
 }
 export async function fileRead(id: string, path: string) {
-  return request<RemoteText>(`/files/${fileSession(id).session}/read`, 'POST', { path });
-}
-export async function fileWrite(id: string, path: string, content: string, revision: string) {
   const session = fileSession(id);
-  if (session.openPaths.has(path)) throw new Error('Close this file in the editor before the agent writes it, to protect its draft.');
+  path = canonicalPath(path);
+  const open = session.readOpen(path);
+  if (open) return { path, ...open, editorDraft: true };
+  return { ...await request<RemoteText>(`/files/${session.session}/read`, 'POST', { path }), editorDraft: false };
+}
+export async function fileWrite(id: string, path: string, content: string, revision: string, snapshot?: EditorSnapshot & { editorDraft: boolean }) {
+  const session = fileSession(id);
+  path = canonicalPath(path);
   if (new TextEncoder().encode(content).length > maxTextBytes) throw new Error('Text files are limited to 1 MiB.');
+  const open = session.readOpen(path);
+  if (open || snapshot?.editorDraft) {
+    if (!open || !snapshot?.editorDraft || snapshot.revision !== revision) throw new Error('The editor state changed. Read the file again before editing.');
+    session.applyOpen(path, snapshot, content);
+    return 'Updated the open editor draft. Save to server to upload it.';
+  }
   return request(`/files/${session.session}/save`, 'PUT', { path, content, revision });
 }
 export async function fileCreate(id: string, path: string, content: string) {

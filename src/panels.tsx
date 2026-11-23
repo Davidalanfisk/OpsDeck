@@ -1,16 +1,18 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { IDockviewPanelProps } from 'dockview';
 import Markdown from 'react-markdown';
 import type { Note } from '../shared/model.ts';
-import { describe, readLocal, request, useOps, writeLocal } from './state.ts';
+import { describe, readLocal, request, RequestError, useOps, writeLocal } from './state.ts';
 import { SshTerminal } from './terminal.tsx';
 import { DesktopBrowser } from './desktop-browser.tsx';
 import { isFileConnection } from '../shared/model.ts';
 import { FileBrowser } from './files.tsx';
+import { checkAgentDraft, registerAgentNote } from './agent-drafts.ts';
 
 type Draft = { content: string; updatedAt: string };
 const saves = new Map<string, { timer: ReturnType<typeof setTimeout>; draft: Draft }>();
 const inFlight = new Map<string, Promise<void>>();
+const noteConflicts = new Map<string, () => void>();
 
 export async function flushNote(note: Note) {
   const pending = saves.get(note.id);
@@ -21,11 +23,12 @@ export async function flushNote(note: Note) {
   const previous = inFlight.get(note.id);
   if (!pending) return previous;
   const { draft } = pending;
-  const current = (previous?.catch(() => undefined) ?? Promise.resolve()).then(async () => {
+  const current = (previous ?? Promise.resolve()).then(async () => {
     const state = useOps.getState();
     const latest = state.deck?.notes.find(item => item.id === note.id) ?? note;
     const saved = await request<Note>(`/clients/${note.client_id}/notes/${note.id}`, 'PUT', {
       title: latest.title, content: draft.content,
+      if_updated_at: latest.updated_at, if_content: latest.content, if_title: latest.title,
     }, draft.content.length < 9500);
     if (readLocal<Draft>(`note:${note.id}`)?.updatedAt === draft.updatedAt) writeLocal(`note:${note.id}`, undefined);
     const deck = useOps.getState().deck;
@@ -35,6 +38,14 @@ export async function flushNote(note: Note) {
   });
   inFlight.set(note.id, current);
   try { await current; }
+  catch (error) {
+    if (error instanceof RequestError && error.status === 409) {
+      const later = saves.get(note.id);
+      if (later) { clearTimeout(later.timer); saves.delete(note.id); }
+      noteConflicts.get(note.id)?.();
+    }
+    throw error;
+  }
   finally { if (inFlight.get(note.id) === current) inFlight.delete(note.id); }
 }
 
@@ -50,10 +61,28 @@ function queueNote(note: Note, draft: Draft) {
 function NoteEditor({ note }: { note: Note }) {
   const draft = readLocal<Draft>(`note:${note.id}`);
   const [content, setContent] = useState(draft?.content ?? note.content);
+  const contentRef = useRef(content);
+  const noteRef = useRef(note);
+  noteRef.current = note;
   const [preview, setPreview] = useState(false);
+  const [recovered, setRecovered] = useState(Boolean(draft));
+  const recoveredRef = useRef(recovered);
   useEffect(() => {
-    const savedDraft = readLocal<Draft>(`note:${note.id}`);
-    if (savedDraft) queueNote(note, savedDraft);
+    const conflict = () => { recoveredRef.current = true; setRecovered(true); };
+    noteConflicts.set(note.id, conflict);
+    return () => { if (noteConflicts.get(note.id) === conflict) noteConflicts.delete(note.id); };
+  }, [note.id]);
+  useEffect(() => registerAgentNote(note.id, {
+    read: () => ({ content: contentRef.current, revision: noteRef.current.updated_at }),
+    apply: (expected, next) => {
+      if (recoveredRef.current) throw new Error('Review and save the recovered note draft before agent editing.');
+      checkAgentDraft({ content: contentRef.current, revision: noteRef.current.updated_at }, expected);
+      contentRef.current = next;
+      setContent(next);
+      queueNote(noteRef.current, { content: next, updatedAt: `${Date.now()}-${Math.random()}` });
+    },
+  }), [note.id]);
+  useEffect(() => {
     const flush = () => { void flushNote(note).catch(error => useOps.getState().setError(`Note autosave failed: ${describe(error)}`)); };
     window.addEventListener('pagehide', flush);
     return () => { window.removeEventListener('pagehide', flush); flush(); };
@@ -64,7 +93,13 @@ function NoteEditor({ note }: { note: Note }) {
         <button aria-pressed={!preview} onClick={() => setPreview(false)}>Write</button>
         <button aria-pressed={preview} onClick={() => setPreview(true)}>Preview</button>
       </div>
+      {recovered && <button onClick={() => {
+        recoveredRef.current = false;
+        setRecovered(false);
+        queueNote(noteRef.current, { content: contentRef.current, updatedAt: `${Date.now()}-${Math.random()}` });
+      }}>Save recovered draft</button>}
     </div>
+    {recovered && <p role="status">A recovered local draft is shown. Review it before saving; the stored note may have changed.</p>}
     {preview
       ? <article className="markdown"><Markdown components={{
         a: ({ node: _node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />,
@@ -74,8 +109,11 @@ function NoteEditor({ note }: { note: Note }) {
         placeholder="Write a runbook, a handover, or anything worth keeping…"
         onChange={event => {
           const next = event.target.value;
+          contentRef.current = next;
           setContent(next);
-          queueNote(note, { content: next, updatedAt: `${Date.now()}-${Math.random()}` });
+          if (recovered) {
+            if (!writeLocal(`note:${note.id}`, { content: next, updatedAt: `${Date.now()}-${Math.random()}` })) useOps.getState().setError('Browser storage is unavailable; leave the note open until it saves.');
+          } else queueNote(note, { content: next, updatedAt: `${Date.now()}-${Math.random()}` });
         }} />}
   </div>;
 }

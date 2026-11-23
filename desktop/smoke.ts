@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
@@ -11,7 +11,8 @@ import { app, BrowserWindow, dialog } from 'electron';
 import { startDesktop } from './window.ts';
 import { ftpFixture, text } from '../test/fixtures/remote.mjs';
 
-const temporary = mkdtempSync(join(tmpdir(), 'opsdeck-desktop-'));
+const temporary = join(process.cwd(), `.opsdeck-desktop-${randomUUID()}`);
+mkdirSync(temporary);
 app.setPath('userData', temporary);
 const deadline = setTimeout(() => { console.error('Desktop smoke test timed out'); app.exit(1); }, 40_000);
 
@@ -30,6 +31,7 @@ void app.whenReady().then(async () => {
   ftp.directories.add('/public');
   let websiteId = '';
   let ftpId = '';
+  let noteId = '';
   const toolResults: string[] = [];
   const modelServer = createServer(async (request, response) => {
     let input = '';
@@ -63,11 +65,18 @@ void app.whenReady().then(async () => {
         ] } }));
         return;
       }
-      if (last.tool_name === 'read_file' && ['Edit remote file', 'Conflict remote file'].includes(instruction ?? '')) {
-        const file = JSON.parse(last.content) as { revision: string };
+      if (last.tool_name === 'read_note' && instruction === 'Edit open note') {
+        const note = JSON.parse(last.content) as { content: string; updated_at: string };
+        response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
+          { function: { name: 'write_note', arguments: { id: noteId, content: `${note.content}\nAgent note edit`, revision: note.updated_at } } },
+        ] } }));
+        return;
+      }
+      if (last.tool_name === 'read_file' && ['Edit remote file', 'Conflict remote file', 'Edit open file'].includes(instruction ?? '')) {
+        const file = JSON.parse(last.content) as { content: string; revision: string };
         if (instruction === 'Conflict remote file') ftp.files.set('/agent.txt', Buffer.from('external edit'));
         response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
-          { function: { name: 'write_file', arguments: { id: ftpId, path: '/agent.txt', content: 'agent edit', revision: file.revision } } },
+          { function: { name: 'write_file', arguments: { id: ftpId, path: '/agent.txt', content: instruction === 'Edit open file' ? `${file.content}\nagent draft` : 'agent edit', revision: file.revision } } },
         ] } }));
         return;
       }
@@ -75,7 +84,8 @@ void app.whenReady().then(async () => {
     } else {
       if (last?.content === 'List\nworkspace') await delay(350);
       const name = last?.content === 'Inspect website' ? 'inspect_website'
-        : ['Edit remote file', 'Conflict remote file'].includes(last?.content ?? '') ? 'read_file'
+        : ['Edit remote file', 'Conflict remote file', 'Edit open file'].includes(last?.content ?? '') ? 'read_file'
+        : last?.content === 'Edit open note' ? 'read_note'
         : last?.content === 'Create note' ? 'create_note'
         : last?.content === 'Create BBC website' ? 'create_website'
         : last?.content === 'Missing note' ? 'write_note' : 'workspace';
@@ -84,6 +94,7 @@ void app.whenReady().then(async () => {
           ? { id: websiteId } : name === 'create_note' ? { title: 'Agent fixture note', content: 'Created by fixture' }
           : name === 'create_website' ? { name: 'Fixture website agent', url: `${siteUrl}/agent` }
           : name === 'write_note' ? { id: 'invented-note', content: 'test', revision: 'invented' }
+          : name === 'read_note' ? { id: noteId }
           : { id: ftpId, path: '/agent.txt' } } },
       ] } }));
     }
@@ -129,7 +140,12 @@ void app.whenReady().then(async () => {
   const directory = join(temporary, 'workspace');
   let window: BrowserWindow | undefined;
   try {
-    const desktop = await startDesktop(directory, resolve('dist'), 43139, fakeOllama, fakeUpdater);
+    const portProbe = createServer();
+    portProbe.listen(0, '127.0.0.1');
+    await once(portProbe, 'listening');
+    const port = (portProbe.address() as AddressInfo).port;
+    await new Promise<void>((resolve, reject) => portProbe.close(error => error ? reject(error) : resolve()));
+    const desktop = await startDesktop(directory, resolve('dist'), port, fakeOllama, fakeUpdater);
     window = desktop.window;
     const workspace = window.webContents;
     const rendererErrors: string[] = [];
@@ -228,8 +244,9 @@ void app.whenReady().then(async () => {
       button.click(); return true;
     })()`));
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.file-login'))`));
-    await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').value = 'fixture-password';
-      document.querySelector('[name="allowInsecure"]').checked = true;
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').focus()`);
+    await workspace.insertText('fixture-password');
+    await workspace.executeJavaScript(`document.querySelector('[name="allowInsecure"]').checked = true;
       document.querySelector('.file-login').requestSubmit();`);
     await until(() => workspace.executeJavaScript(`(() => {
       const button = document.querySelector('.remote-entry button[title="fixture.php"]');
@@ -254,11 +271,11 @@ void app.whenReady().then(async () => {
     await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Save to server' && !button.disabled)`));
     assert.deepEqual(ftp.files.get('/fixture.php'), text);
     ftp.files.set('/fixture.json', Buffer.from('{"message": "hello"}\r\n'));
-    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Go / Refresh').click()`);
+    await workspace.executeJavaScript(`(() => { const button = Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Go / Refresh'); button.focus(); button.click(); })()`);
     await until(() => workspace.executeJavaScript(`(() => {
       const button = document.querySelector('.remote-entry button[title="fixture.json"]');
       if (!button || button.disabled) return false;
-      button.click(); return true;
+      button.focus(); button.click(); return true;
     })()`));
     await until(() => workspace.executeJavaScript(`document.querySelector('.remote-editor .panel-toolbar .truncate')?.textContent === '/fixture.json'`));
     await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.includes('message')`));
@@ -268,6 +285,7 @@ void app.whenReady().then(async () => {
     })()`);
     workspace.sendInputEvent({ type: 'mouseDown', button: 'left', ...jsonPoint, clickCount: 1 });
     workspace.sendInputEvent({ type: 'mouseUp', button: 'left', ...jsonPoint, clickCount: 1 });
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.contains(document.activeElement)`));
     workspace.sendInputEvent({ type: 'keyDown', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
     workspace.sendInputEvent({ type: 'keyUp', keyCode: 'End', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
     await workspace.insertText('\r\n// reconnect draft');
@@ -275,6 +293,7 @@ void app.whenReady().then(async () => {
     assert.equal(await workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [aria-label="Unsaved"]').length`), 2);
     await workspace.executeJavaScript(`window.confirm = () => false; document.querySelector('[title="/fixture.php"][role="tab"]').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('desktop editor fixture')`));
+    assert.doesNotMatch(await workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor').textContent`), /reconnect/);
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Close /fixture.json"]').click(); document.querySelector('[aria-label="Close Local fixture"]').click(); document.querySelector('.workspace-bar button').click()`);
     assert.equal(await workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [role="tab"]').length`), 2);
     assert.equal(await workspace.executeJavaScript(`Boolean(document.querySelector('.files-panel'))`), true);
@@ -287,14 +306,29 @@ void app.whenReady().then(async () => {
     await until(() => workspace.executeJavaScript(`document.querySelectorAll('.file-tabs [aria-label="Unsaved"]').length === 1`));
     await workspace.executeJavaScript(`document.querySelector('[title="/fixture.json"][role="tab"]').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
+    const restoredPoint = await workspace.executeJavaScript(`(() => {
+      const box = document.querySelector('.file-editor-host:not([hidden]) .monaco-editor .view-lines').getBoundingClientRect();
+      return { x: Math.round(box.x + 20), y: Math.round(box.y + 10) };
+    })()`);
+    workspace.sendInputEvent({ type: 'mouseDown', button: 'left', ...restoredPoint, clickCount: 1 });
+    workspace.sendInputEvent({ type: 'mouseUp', button: 'left', ...restoredPoint, clickCount: 1 });
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.contains(document.activeElement)`));
+    const restoredText = await workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor').textContent`);
+    workspace.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+    workspace.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] });
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor').textContent !== ${JSON.stringify(restoredText)}`));
+    workspace.sendInputEvent({ type: 'keyDown', keyCode: 'Z', modifiers: [process.platform === 'darwin' ? 'meta' : 'control', 'shift'] });
+    workspace.sendInputEvent({ type: 'keyUp', keyCode: 'Z', modifiers: [process.platform === 'darwin' ? 'meta' : 'control', 'shift'] });
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
     ftp.files.set('/fixture.json', Buffer.from('{"changed": true}'));
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Save to server').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.file-message.error')?.textContent.includes('changed')`));
     assert.equal(ftp.files.get('/fixture.json')?.toString(), '{"changed": true}');
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Reconnect').click()`);
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.file-login'))`));
-    await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').value = 'fixture-password';
-      document.querySelector('[name="allowInsecure"]').checked = true;
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="File connection password"]').focus()`);
+    await workspace.insertText('fixture-password');
+    await workspace.executeJavaScript(`document.querySelector('[name="allowInsecure"]').checked = true;
       document.querySelector('.file-login').requestSubmit();`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('reconnect draft')`));
     assert.equal(ftp.files.get('/fixture.json')?.toString(), '{"changed": true}');
@@ -327,11 +361,13 @@ void app.whenReady().then(async () => {
     const blocked = await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect').then(() => false, () => true)`);
     assert.equal(blocked, true);
     async function askAgent(prompt: string) {
+      await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-thinking')`));
       const previous = await workspace.executeJavaScript(`document.querySelectorAll('.agent-message.assistant').length`);
       await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').focus()`);
       await workspace.insertText(prompt);
       await workspace.executeJavaScript(`document.querySelector('.agent-input').requestSubmit()`);
       await until(() => workspace.executeJavaScript(`document.querySelectorAll('.agent-message.assistant').length >= ${previous + 1}`));
+      await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-thinking')`));
     }
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').focus()`);
     await workspace.insertText('List');
@@ -350,10 +386,19 @@ void app.whenReady().then(async () => {
     assert.match(toolResults.at(-1) ?? '', /Fixture website/);
     await askAgent('Create note');
     const created = JSON.parse(toolResults.at(-2) ?? '{}') as { id: string; title: string };
+    noteId = created.id;
     assert.match(created.id, /^[\da-f-]{36}$/);
     assert.match(toolResults.at(-1) ?? '', /Created by fixture/);
     const notes = await workspace.executeJavaScript(`fetch('/api/clients/${result.id}').then(response => response.json()).then(deck => deck.notes)`) as Array<{ id: string; title: string; content: string }>;
     assert.ok(notes.some(note => note.id === created.id && note.title === 'Agent fixture note' && note.content === 'Created by fixture'));
+    await workspace.executeJavaScript(`document.querySelector('button[title="Agent fixture note"]').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('[aria-label="Markdown note content"]'))`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Markdown note content"]').focus()`);
+    await workspace.insertText('user draft ');
+    await until(() => workspace.executeJavaScript(`fetch('/api/clients/${result.id}').then(response => response.json()).then(deck => deck.notes.find(note => note.id === ${JSON.stringify(created.id)})?.content.includes('user draft'))`));
+    await askAgent('Edit open note');
+    await until(() => workspace.executeJavaScript(`document.querySelector('[aria-label="Markdown note content"]')?.value.includes('Agent note edit')`));
+    assert.match(await workspace.executeJavaScript(`document.querySelector('[aria-label="Markdown note content"]').value`), /user draft/);
     await askAgent('Missing note');
     assert.match(toolResults.at(-1) ?? '', /Note not found.*create_note/);
     await askAgent('Create BBC website');
@@ -368,6 +413,23 @@ void app.whenReady().then(async () => {
     await askAgent('Conflict remote file');
     assert.equal(ftp.files.get('/agent.txt')?.toString(), 'external edit');
     assert.match(toolResults.at(-1) ?? '', /remote file changed/i);
+    await workspace.executeJavaScript(`document.querySelector('button[title="Local fixture"]').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.files-panel')?.getBoundingClientRect().width > 0`));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Go / Refresh').click()`);
+    await until(() => workspace.executeJavaScript(`(() => { const button = document.querySelector('.remote-entry button[title="agent.txt"]'); if (!button || button.disabled) return false; button.click(); return true; })()`));
+    await until(() => workspace.executeJavaScript(`document.querySelector('.remote-editor .panel-toolbar .truncate')?.textContent === '/agent.txt'`));
+    const agentPoint = await workspace.executeJavaScript(`(() => { const box = document.querySelector('.file-editor-host:not([hidden]) .monaco-editor .view-lines').getBoundingClientRect(); return { x: Math.round(box.x + 20), y: Math.round(box.y + 10) }; })()`);
+    workspace.sendInputEvent({ type: 'mouseDown', button: 'left', ...agentPoint, clickCount: 1 });
+    workspace.sendInputEvent({ type: 'mouseUp', button: 'left', ...agentPoint, clickCount: 1 });
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.contains(document.activeElement)`));
+    await workspace.insertText('user draft ');
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('user draft')`));
+    await askAgent('Edit open file');
+    await until(() => workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor')?.textContent.replace(/\\u00a0/g, ' ').includes('agent draft')`));
+    assert.match(await workspace.executeJavaScript(`document.querySelector('.file-editor-host:not([hidden]) .monaco-editor').textContent.replace(/\\u00a0/g, ' ')`), /user draft/);
+    assert.equal(ftp.files.get('/agent.txt')?.toString(), 'external edit');
+    await workspace.executeJavaScript(`document.querySelector('button[title="Fixture website"]').click()`);
+    await until(() => freshPane.getVisible());
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent settings"]').click()`);
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.agent-consent input'))`));
     await workspace.executeJavaScript(`document.querySelector('.agent-consent input').click()`);

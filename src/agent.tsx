@@ -8,6 +8,10 @@ import { normalizeWebsiteUrl } from '../shared/website-url.ts';
 import { fileCreate, fileList, fileRead, fileWrite, terminalRead, terminalSend } from './agent-sessions.ts';
 import { flushNote } from './panels.tsx';
 import { describe, readLocal, refreshDeck, request, useOps } from './state.ts';
+import { agentNote } from './agent-drafts.ts';
+import { newConversation, recoverConversation, saveConversation } from './agent-history.ts';
+import type { AgentConversation, DisplayMessage } from './agent-history.ts';
+import { loadAgentConversations, saveAgentConversation } from './agent-storage.ts';
 
 const system: AgentMessage = {
   role: 'system',
@@ -25,12 +29,12 @@ const tools: AgentTool[] = [
   makeTool('create_website', 'Add a website connection to this client. Returns its server-assigned id; then open it with open_pane kind connection.', { name: 'Display name', url: 'Website address, for example https://www.example.com' }),
   makeTool('create_note', 'Create a new note in this client. The server assigns its ID; do not invent one.', { title: 'Title for the new note', content: 'Full note content' }),
   makeTool('read_note', 'Read an existing note in this client, using an ID returned by workspace or create_note.', { id: 'Existing note id' }),
-  makeTool('write_note', 'Replace an existing note using its ID and revision from read_note. For a new note use create_note instead. Close the note pane first.', { id: 'Existing note id', content: 'Full new note content', revision: 'updated_at returned by read_note' }),
+  makeTool('write_note', 'Replace an existing note using its ID and revision from read_note. Open note edits appear in the editor and autosave. For a new note use create_note instead.', { id: 'Existing note id', content: 'Full new note content', revision: 'updated_at returned by read_note' }),
   makeTool('read_terminal', 'Read recent output from an open SSH terminal.', { id: 'SSH connection id' }),
   makeTool('send_command', 'Run one shell command in an already-connected SSH terminal.', { id: 'SSH connection id', command: 'Single shell command' }),
   makeTool('list_files', 'List an absolute remote directory using an already-connected file pane.', { id: 'File connection id', path: 'Absolute directory path' }),
   makeTool('read_file', 'Read a UTF-8 remote file and its revision.', { id: 'File connection id', path: 'Absolute file path' }),
-  makeTool('write_file', 'Replace an existing remote file using the revision from read_file. This uploads immediately.', { id: 'File connection id', path: 'Absolute file path', content: 'Full new text', revision: 'SHA256 revision returned by read_file' }),
+  makeTool('write_file', 'Replace an existing remote file using the revision from read_file. Open files are updated as unsaved editor drafts; closed files upload immediately.', { id: 'File connection id', path: 'Absolute file path', content: 'Full new text', revision: 'SHA256 revision returned by read_file' }),
   makeTool('create_file', 'Create a new UTF-8 remote file; never replaces an existing file.', { id: 'File connection id', path: 'Absolute file path', content: 'Full new text' }),
   makeTool('inspect_website', 'Read visible text and numbered controls of an open website pane. Requires session website access.', { id: 'Website connection id' }),
   makeTool('click_website', 'Click a numbered website control from the latest inspection.', { id: 'Website connection id', index: 'Control number' }),
@@ -42,8 +46,6 @@ const modelLabels: Record<OllamaModel, string> = {
   'qwen3:14b': 'Qwen3 14B — about 9.3 GB',
   'qwen3:30b-a3b': 'Qwen3 30B-A3B — about 19 GB (high memory)',
 };
-type DisplayMessage = { role: 'user' | 'assistant' | 'action' | 'error'; content: string };
-
 export function Agent({ deck, dock, openPanel, close }: {
   deck: Deck; dock: DockviewApi; openPanel: (item: Connection | Note, files?: boolean) => void; close: () => void;
 }) {
@@ -53,20 +55,79 @@ export function Agent({ deck, dock, openPanel, close }: {
   const [website, setWebsite] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(true);
   const [acknowledged, setAcknowledged] = useState(false);
-  const [messages, setMessages] = useState<DisplayMessage[]>([]);
-  const conversation = useRef<AgentMessage[]>([system]);
-  const noteSnapshots = useRef(new Map<string, { content: string; title: string; revision: string }>());
+  const [conversations, setConversations] = useState<AgentConversation[]>([]);
+  const [active, setActive] = useState<AgentConversation>(() => newConversation(system));
+  const conversationsRef = useRef(conversations);
+  const activeRef = useRef(active);
+  const versions = useRef(new Map<string, number>());
+  const pending = useRef<AgentConversation | undefined>(undefined);
+  const [storageReady, setStorageReady] = useState(false);
+  const [storageError, setStorageError] = useState('');
+  const [storageBusy, setStorageBusy] = useState(false);
+  const messagesEnd = useRef<HTMLDivElement>(null);
+  const noteSnapshots = useRef(new Map<string, { content: string; title: string; revision: string; editorDraft: boolean }>());
+  const fileSnapshots = useRef(new Map<string, { content: string; revision: string; editorDraft: boolean }>());
   const currentDeck = useRef(deck);
   currentDeck.current = deck;
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const stopped = useRef(false);
   const alive = useRef(true);
   const [error, setError] = useState('');
   const modelReady = status?.phase === 'ready' && status.model === model;
+  useEffect(() => { messagesEnd.current?.scrollIntoView({ block: 'end' }); }, [active.messages, busy]);
+
+  async function persist(next: AgentConversation) {
+    activeRef.current = next;
+    const all = saveConversation(conversationsRef.current, next);
+    conversationsRef.current = all;
+    pending.current = next;
+    if (alive.current) { setActive(next); setConversations(all); }
+    try {
+      const version = await saveAgentConversation(deck.client.id, next, versions.current.get(next.id) ?? 0);
+      versions.current.set(next.id, version);
+      if (pending.current === next) pending.current = undefined;
+      if (alive.current) setStorageError('');
+    } catch (error) {
+      if (alive.current) setStorageError(`Conversation was not saved: ${describe(error)}. Keep this panel open and retry or copy your unsaved conversation.`);
+      throw error;
+    }
+  }
+
+  function record(role: DisplayMessage['role'], content: string, history?: AgentMessage[]) {
+    const current = activeRef.current;
+    return persist({ ...current, updatedAt: Date.now(), title: current.title === 'New chat' && role === 'user' ? content.slice(0, 60) : current.title,
+      messages: [...current.messages, { role, content }], history: history ? [...history] : current.history });
+  }
+
+  function saveHistory(history: AgentMessage[]) {
+    return persist({ ...activeRef.current, updatedAt: Date.now(), history: [...history] });
+  }
+
+  async function load() {
+    setStorageBusy(true); setStorageError('');
+    try {
+      const stored = await loadAgentConversations(deck.client.id);
+      if (!alive.current) return;
+      versions.current = new Map(stored.map(item => [item.conversation.id, item.version]));
+      const chats = stored.map(item => recoverConversation(item.conversation, system));
+      conversationsRef.current = chats;
+      const selected = chats[0] ?? newConversation(system);
+      activeRef.current = selected;
+      setConversations(chats); setActive(selected); setStorageReady(true);
+    } catch (error) {
+      if (alive.current) setStorageError(`Could not load or migrate conversations: ${describe(error)}. Existing data was retained.`);
+    } finally { if (alive.current) setStorageBusy(false); }
+  }
 
   useEffect(() => {
     alive.current = true;
+    void load();
+    const unload = (event: BeforeUnloadEvent) => {
+      if (busyRef.current || pending.current) { event.preventDefault(); event.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', unload);
     const update = () => void bridge.ollamaStatus().then(next => {
       if (alive.current) { setStatus(next); setModel(current => current ?? next.model ?? next.recommended); }
     }).catch(error => { if (alive.current) setError(describe(error)); });
@@ -75,15 +136,13 @@ export function Agent({ deck, dock, openPanel, close }: {
     return () => {
       alive.current = false;
       stopped.current = true;
+      window.removeEventListener('beforeunload', unload);
       clearInterval(timer);
       bridge.agentCancel();
       void bridge.agentWebsiteAccess(null).catch(() => undefined);
     };
   }, [bridge, deck.client.id]);
 
-  const add = (role: DisplayMessage['role'], content: string) => {
-    if (alive.current) setMessages(previous => [...previous, { role, content }]);
-  };
   function text(args: Record<string, unknown>, key: string, limit = 100_000) {
     const value = args[key];
     if (typeof value !== 'string' || value.length > limit || (key !== 'content' && !value)) throw new Error(`Invalid ${key}.`);
@@ -133,18 +192,27 @@ export function Agent({ deck, dock, openPanel, close }: {
       throw new Error('Note not found in this client. Use workspace to find an existing note, or create_note to create one.');
     }
     if (name === 'read_note' && note) {
+      const editor = agentNote(id);
       const draft = readLocal<{ content: string }>(`note:${id}`);
-      const content = draft?.content ?? note.content;
-      noteSnapshots.current.set(id, { content, title: note.title, revision: note.updated_at });
-      return { title: note.title, content: content.slice(0, 30_000), truncated: content.length > 30_000, updated_at: note.updated_at };
+      const open = editor?.read();
+      const content = open?.content ?? draft?.content ?? note.content;
+      const revision = open?.revision ?? note.updated_at;
+      noteSnapshots.current.set(id, { content, title: note.title, revision, editorDraft: !!open });
+      return { title: note.title, content: content.slice(0, 30_000), truncated: content.length > 30_000, updated_at: revision };
     }
     if (name === 'write_note' && note) {
-      if (dock.getPanel(`item:${id}`)) throw new Error('Close the note pane before replacing its content.');
-      await flushNote(note);
       const snapshot = noteSnapshots.current.get(id);
       if (!snapshot || snapshot.revision !== text(args, 'revision', 80)) throw new Error('Read the note before updating it.');
       if (snapshot.content.length > 30_000) throw new Error('This note is too large for safe agent editing. Edit it manually.');
       const content = text(args, 'content');
+      const editor = agentNote(id);
+      if (editor || snapshot.editorDraft) {
+        if (!editor || !snapshot.editorDraft) throw new Error('The note editor state changed. Read the note again.');
+        editor.apply(snapshot, content);
+        noteSnapshots.current.delete(id);
+        return 'Updated the open note editor; its normal autosave is queued.';
+      }
+      await flushNote(note);
       await request(`/clients/${deck.client.id}/notes/${id}`, 'PUT', {
         title: snapshot.title, content, if_updated_at: snapshot.revision, if_content: snapshot.content, if_title: snapshot.title,
       });
@@ -158,15 +226,18 @@ export function Agent({ deck, dock, openPanel, close }: {
     if (name === 'list_files') return fileList(id, text(args, 'path', 4096));
     if (name === 'read_file') {
       const file = await fileRead(id, text(args, 'path', 4096));
+      fileSnapshots.current.set(`${id}\0${text(args, 'path', 4096)}`, file);
       return { ...file, content: file.content.slice(0, 30_000), truncated: file.content.length > 30_000 };
     }
     if (name === 'write_file') {
       const path = text(args, 'path', 4096);
       const revision = text(args, 'revision', 64);
-      const existing = await fileRead(id, path);
-      if (existing.content.length > 30_000) throw new Error('This file is too large for safe agent editing. Edit it manually.');
-      if (existing.revision !== revision) throw new Error('The remote file changed. Read it again before saving.');
-      return fileWrite(id, path, text(args, 'content'), revision);
+      const snapshot = fileSnapshots.current.get(`${id}\0${path}`);
+      if (!snapshot || snapshot.revision !== revision) throw new Error('Read the file before updating it.');
+      if (snapshot.content.length > 30_000) throw new Error('This file is too large for safe agent editing. Edit it manually.');
+      const result = await fileWrite(id, path, text(args, 'content'), revision, snapshot);
+      fileSnapshots.current.delete(`${id}\0${path}`);
+      return result;
     }
     if (name === 'create_file') return fileCreate(id, text(args, 'path', 4096), text(args, 'content'));
     if (name === 'inspect_website') return bridge.agentWebsite(id, 'inspect');
@@ -182,54 +253,67 @@ export function Agent({ deck, dock, openPanel, close }: {
   async function submit(event: FormEvent) {
     event.preventDefault();
     const prompt = input.trim();
-    if (!prompt || busy || !modelReady || !acknowledged) return;
-    setInput(''); setError(''); setBusy(true); stopped.current = false;
-    add('user', prompt);
-    const history: AgentMessage[] = [...conversation.current, { role: 'user', content: prompt }];
+    if (!prompt || busy || !modelReady || !acknowledged || !storageReady || storageError) return;
+    setInput(''); setError(''); busyRef.current = true; setBusy(true); stopped.current = false;
+    const history: AgentMessage[] = [...activeRef.current.history, { role: 'user', content: prompt }];
     let retried = false;
     try {
+      await record('user', prompt, history);
       for (let step = 0; step < 12 && !stopped.current; step++) {
         const reply = await bridge.agentChat(retried ? [...history, emptyRetry] : history, tools);
         if (stopped.current || !alive.current) break;
         if (!reply.tool_calls?.length && !reply.content.trim()) {
           if (retried) throw new Error('The model returned an empty response twice. Try rephrasing, or start a new chat.');
+          await record('action', `Model returned an empty response. Retry instruction: ${emptyRetry.content}`);
           retried = true;
           continue;
         }
         retried = false;
         history.push(reply);
+        if (reply.content.trim()) await record('assistant', reply.content, history);
+        else await saveHistory(history);
         if (!reply.tool_calls?.length) {
-          add('assistant', reply.content);
           return;
         }
         for (const call of reply.tool_calls) {
-          if (stopped.current || !alive.current) break;
+          if (stopped.current || !alive.current) {
+            history.push({ role: 'tool', tool_name: call.function.name, content: JSON.stringify({ error: 'Action skipped because the agent stopped.' }) });
+            await saveHistory(history);
+            continue;
+          }
           const target = typeof call.function.arguments.path === 'string' ? call.function.arguments.path
             : typeof call.function.arguments.id === 'string' ? call.function.arguments.id : '';
-          add('action', `${call.function.name}${target ? `: ${target.slice(0, 160)}` : ''}`);
+          await record('action', `${call.function.name}${target ? `: ${target.slice(0, 160)}` : ''}\n${JSON.stringify(call.function.arguments, null, 2)}`);
           let output: string;
-          try { output = JSON.stringify(await execute(call.function.name, call.function.arguments)); }
-          catch (error) { output = JSON.stringify({ error: describe(error) }); }
+          let displayRole: DisplayMessage['role'] = 'tool';
+          let display: string;
+          try { output = JSON.stringify(await execute(call.function.name, call.function.arguments)) ?? 'null'; display = output; }
+          catch (error) { output = JSON.stringify({ error: describe(error) }); displayRole = 'error'; display = `${call.function.name}: ${describe(error)}`; }
           history.push({ role: 'tool', tool_name: call.function.name, content: output.length > 100_000
             ? JSON.stringify({ error: 'The result is too large for the local agent. Inspect it manually.' }) : output });
+          await record(displayRole, display, history);
         }
       }
       if (!stopped.current) throw new Error('Agent stopped after 12 steps. Review the actions and continue if needed.');
-      add('assistant', 'Stopped. An action already sent may still complete.');
+      await record('assistant', 'Stopped. An action already sent may still complete.', history);
     } catch (error) {
-      if (stopped.current) add('assistant', 'Stopped. An action already sent may still complete.');
-      else add('error', describe(error));
+      if (!pending.current) {
+        try { await record(stopped.current ? 'assistant' : 'error', stopped.current ? 'Stopped. An action already sent may still complete.' : describe(error), history); }
+        catch { /* The persistence error is displayed separately. */ }
+      }
     } finally {
-      conversation.current = history;
+      busyRef.current = false;
       if (alive.current) setBusy(false);
     }
   }
 
   return <aside className="agent-panel" aria-label="Local agent">
     <div className="agent-heading"><strong>Local agent</strong><span className="spacer" />
-      <button disabled={busy} onClick={() => { setMessages([]); conversation.current = [system]; noteSnapshots.current.clear(); }}>New chat</button>
+      <button disabled={busy || !storageReady || !!storageError} onClick={() => { const next = newConversation(system); activeRef.current = next; setActive(next); noteSnapshots.current.clear(); fileSnapshots.current.clear(); }}>New chat</button>
       <button type="button" aria-label="Agent settings" aria-expanded={settingsOpen} title="Agent settings" disabled={!acknowledged} onClick={() => setSettingsOpen(open => !open)}>⚙</button>
-      <button onClick={close} aria-label="Close agent">×</button></div>
+      <button disabled={busy || storageBusy} onClick={() => {
+        if (!pending.current || window.confirm('This conversation has unsaved changes. Close anyway?')) close();
+      }} aria-label="Close agent">×</button></div>
     {settingsOpen && <>
     <p className="agent-warning">Actions can change remote systems without further approval. Malicious pages or files may trick the model into running commands or sending workspace data elsewhere. Use trusted systems and review the action log.</p>
     <div className="agent-setup">
@@ -258,11 +342,36 @@ export function Agent({ deck, dock, openPanel, close }: {
     </>}
     {!settingsOpen && <small className="agent-summary">{status?.phase === 'ready' ? `Model: ${status.model}` : status?.detail}
       {website ? ' · Website access on' : ' · Website access off'}</small>}
+    <details><summary>Agent instructions</summary><pre className="agent-instructions">{system.content}</pre></details>
+    {conversations.length > 0 && <label>Conversation <select aria-label="Conversation" disabled={busy || !!storageError || storageBusy} value={active.id} onChange={event => {
+      const selected = conversationsRef.current.find(item => item.id === event.target.value);
+      if (selected) { activeRef.current = selected; setActive(selected); noteSnapshots.current.clear(); fileSnapshots.current.clear(); }
+    }}>{!conversations.some(item => item.id === active.id) && <option value={active.id}>New chat</option>}
+      {conversations.map(item => <option key={item.id} value={item.id}>{item.title} — {new Date(item.updatedAt).toLocaleString()}</option>)}
+    </select></label>}
     <div className="agent-messages" aria-live="polite">
-      {messages.map((message, index) => <div key={index} className={`agent-message ${message.role}`}><strong>{message.role === 'user' ? 'You' : message.role === 'assistant' ? 'AI' : message.role}</strong><pre>{message.content}</pre></div>)}
+      {active.messages.map((message, index) => <div key={index} className={`agent-message ${message.role}`}><strong>{message.role === 'user' ? 'You' : message.role === 'assistant' ? 'AI' : message.role}</strong><pre>{message.content}</pre></div>)}
       {busy && <div className="agent-thinking" role="status"><span className="agent-spinner" aria-hidden="true" /> Working…</div>}
+      <div ref={messagesEnd} />
     </div>
     {error && <p role="alert" className="error">{error}</p>}
+    {storageError && <div role="alert" className="error">{storageError}
+      <button type="button" disabled={busy || storageBusy} onClick={() => {
+        if (!storageReady) void load();
+        else if (pending.current) {
+          setStorageBusy(true);
+          void persist(recoverConversation(pending.current, system)).catch(() => undefined).finally(() => { if (alive.current) setStorageBusy(false); });
+        }
+      }}>{storageReady ? 'Retry saving' : 'Retry loading'}</button>
+      {pending.current && <button type="button" onClick={() => void navigator.clipboard.writeText(JSON.stringify(pending.current, null, 2))
+        .catch(error => setError(`Could not copy conversation: ${describe(error)}`))}>Copy unsaved conversation</button>}
+      {pending.current && <button type="button" disabled={busy || storageBusy} onClick={() => {
+        if (!window.confirm('Discard this unsaved conversation copy and reload the saved conversations?')) return;
+        pending.current = undefined;
+        setStorageReady(false);
+        void load();
+      }}>Discard unsaved and reload</button>}
+    </div>}
     <form className="agent-input" onSubmit={event => void submit(event)}>
       <textarea aria-label="Agent instruction" value={input} onChange={event => setInput(event.target.value)} placeholder="Ask the local agent…" maxLength={10000}
         onKeyDown={event => {
@@ -272,7 +381,7 @@ export function Agent({ deck, dock, openPanel, close }: {
           }
         }} />
       {busy ? <button type="button" onClick={() => { stopped.current = true; bridge.agentCancel(); }}>Stop</button>
-        : <button className="primary" disabled={!modelReady || !acknowledged || !input.trim()}>Send</button>}
+        : <button className="primary" disabled={!modelReady || !acknowledged || !input.trim() || !storageReady || !!storageError || storageBusy}>Send</button>}
     </form>
   </aside>;
 }

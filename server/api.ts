@@ -70,6 +70,37 @@ export function api(db: DatabaseSync) {
     db.prepare('DELETE FROM clients WHERE id = ?').run(res.locals.client.id);
     res.sendStatus(204);
   });
+  const agentMessage = z.object({
+    role: z.enum(['system', 'user', 'assistant', 'tool']), content: z.string(),
+    tool_name: z.string().optional(),
+    tool_calls: z.array(z.object({ function: z.object({ name: z.string(), arguments: z.record(z.string(), z.unknown()) }) })).optional(),
+  });
+  const agentConversation = z.object({
+    id: z.string().uuid(), title: z.string(), updatedAt: z.number().finite(),
+    messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'action', 'tool', 'error']), content: z.string() })),
+    history: z.array(agentMessage),
+  });
+  client.get('/agent-conversations', (_req, res) => {
+    const rows = db.prepare('SELECT conversation_json, version FROM agent_conversations WHERE client_id = ?')
+      .all(res.locals.client.id);
+    res.json(rows.map(row => ({ conversation: JSON.parse(String(row.conversation_json)), version: row.version })));
+  });
+  client.put('/agent-conversations/:conversationId', (req, res) => {
+    const { conversation, expectedVersion } = z.object({
+      conversation: agentConversation, expectedVersion: z.number().int().nonnegative(),
+    }).parse(req.body);
+    if (conversation.id !== req.params.conversationId) {
+      res.status(400).json({ error: 'Conversation ID does not match the path.' }); return;
+    }
+    const serialized = JSON.stringify(conversation);
+    const result = expectedVersion === 0
+      ? db.prepare('INSERT OR IGNORE INTO agent_conversations (client_id, id, conversation_json, version) VALUES (?, ?, ?, 1)')
+        .run(res.locals.client.id, conversation.id, serialized)
+      : db.prepare('UPDATE agent_conversations SET conversation_json = ?, version = version + 1 WHERE client_id = ? AND id = ? AND version = ?')
+        .run(serialized, res.locals.client.id, conversation.id, expectedVersion);
+    if (!result.changes) { res.status(409).json({ error: 'Conversation changed in another session. Your unsaved changes were not overwritten.' }); return; }
+    res.json({ version: expectedVersion + 1 });
+  });
   for (const table of ['connections', 'notes'] as const) {
     function values(body: unknown) {
       if (table === 'notes') {

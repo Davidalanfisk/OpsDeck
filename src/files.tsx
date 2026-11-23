@@ -8,6 +8,8 @@ import { confirmFileDiscard, setFileDirty } from './file-drafts.ts';
 import { describe, request, RequestError, useOps } from './state.ts';
 import { Icon } from './icons.tsx';
 import { registerAgentFiles } from './agent-sessions.ts';
+import { notifyCredentialChange, useConnectionCredentials } from './connection-credentials.ts';
+import { checkAgentDraft } from './agent-drafts.ts';
 
 const Monaco = lazy(() => import('./monaco.tsx').then(module => ({ default: module.Monaco })));
 const join = (path: string, name: string) => `${path.replace(/\/$/, '')}/${name}`;
@@ -23,11 +25,15 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
   const [pathInput, setPathInput] = useState('/');
   const [entries, setEntries] = useState<RemoteEntry[]>([]);
   const [files, setFiles] = useState<OpenFile[]>([]);
+  const filesRef = useRef(files);
+  filesRef.current = files;
   const [activePath, setActivePath] = useState('');
   const [busy, setBusy] = useState(false);
   const busyRef = useRef(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const { credential, credentialError } = useConnectionCredentials(connection.client_id, connection.id);
+  const [password, setPassword] = useState('');
   const alive = useRef(true);
   const file = files.find(item => item.path === activePath);
   const dirty = files.some(isDirty);
@@ -35,8 +41,22 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
   dirtyRef.current = dirty;
   useEffect(() => {
     if (!session) return;
-    return registerAgentFiles(connection.id, { session, openPaths: new Set(files.map(item => item.path)) });
-  }, [connection.id, session, files]);
+    return registerAgentFiles(connection.id, {
+      session,
+      readOpen: path => {
+        const file = filesRef.current.find(item => item.path === path);
+        return file && { content: file.draft, revision: file.revision };
+      },
+      applyOpen: (path, expected, content) => {
+        const file = filesRef.current.find(item => item.path === path);
+        checkAgentDraft(file && { content: file.draft, revision: file.revision }, expected, busyRef.current);
+        const next = filesRef.current.map(item => item.path === path ? { ...item, draft: content } : item);
+        filesRef.current = next;
+        setFiles(next);
+        setNotice('Agent updated the editor draft. Review and save it to upload.');
+      },
+    });
+  }, [connection.id, session]);
   const id = `files:${connection.id}`;
   setFileDirty(id, dirty);
   useEffect(() => {
@@ -75,13 +95,15 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
   function connect(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
-    const password = data.get('password') || undefined;
     const allowInsecure = data.get('allowInsecure') === 'on' || undefined;
+    const remember = data.get('remember') === 'on' || undefined;
     event.currentTarget.reset();
+    setPassword('');
     void run(async () => {
       const result = await request<{ session: string; path: string }>('/files/connect', 'POST', {
-        clientId: connection.client_id, connectionId: connection.id, password, allowInsecure,
+        clientId: connection.client_id, connectionId: connection.id, password: password || undefined, allowInsecure, remember,
       });
+      if (remember) notifyCredentialChange();
       if (!alive.current) { await request(`/files/${result.session}`, 'DELETE'); return; }
       sessionRef.current = result.session;
       setSession(result.session);
@@ -131,6 +153,25 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
     const link = document.createElement('a'); link.href = url; link.download = name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 30_000);
   }
+  function create(kind: 'file' | 'directory') {
+    const name = window.prompt(`New ${kind} name:`);
+    if (name === null) return;
+    if (!name || name === '.' || name === '..' || /[\/\\\0\r\n]/.test(name)) {
+      setError('Enter a single valid name without slashes or line breaks.');
+      return;
+    }
+    const target = join(path, name);
+    if (filesRef.current.some(item => item.path === target)) {
+      setError('This path is already open. Close the file before creating it.');
+      return;
+    }
+    void run(async () => {
+      if (kind === 'file') await request(`/files/${sessionRef.current}/upload`, 'POST', { path: target, data: '' });
+      else await request(`/files/${sessionRef.current}/mkdir`, 'POST', { path: target });
+      await list(path);
+      setNotice(`Created new ${kind}.`);
+    });
+  }
   function disconnect() {
     if (!confirmFileDiscard(id)) return;
     void run(async () => {
@@ -142,8 +183,18 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
   return <div className="files-panel">
     {!session ? <form className="file-login" onSubmit={connect}>
       <span className="muted">{connection.type === 'SSH' ? 'SFTP' : connection.type}: {connection.username}@{connection.host}:{connection.port}</span>
-      {!agent && <label>Password <input name="password" aria-label="File connection password" type="password" required autoComplete="off" maxLength={4096} /></label>}
+      {!agent && <>
+        <label>Password <input name="password" aria-label="File connection password" type="password" required={!credential?.saved || !credential.available} value={password} onChange={event => setPassword(event.target.value)} autoComplete="off" maxLength={4096} /></label>
+        {credential?.saved && credential.available && <p>Leave the password blank to use the saved password.</p>}
+        {credential?.available && <label><input name="remember" type="checkbox" disabled={!password} /> Save this password securely</label>}
+        {credential && !credential.available && <p>Secure password storage is unavailable; passwords cannot be saved here.</p>}
+      </>}
       {agent && <p>Connect using the saved SSH agent identity.</p>}
+      {credential?.stored && <button type="button" disabled={busy} onClick={() => void run(async () => {
+        await request('/files/credentials', 'DELETE', { clientId: connection.client_id, connectionId: connection.id });
+        notifyCredentialChange();
+        setNotice('Saved password removed.');
+      })}>Forget saved password</button>}
       {files.length > 0 && <p>Your open files and edits are retained. Reconnect to save or reload them.</p>}
       {connection.type === 'FTP' && <label className="error"><input name="allowInsecure" type="checkbox" required /> I understand FTP sends my password and files unencrypted.</label>}
       <button className="primary" disabled={busy}>Connect files</button>
@@ -152,6 +203,8 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
         <button type="button" disabled={busy || path === '/'} onClick={() => void run(() => list(parent(path)))}>Up</button>
         <input className="remote-path" aria-label="Remote directory" value={pathInput} onChange={event => setPathInput(event.target.value)} />
         <button disabled={busy}>Go / Refresh</button>
+        <button type="button" disabled={busy} onClick={() => create('file')}>New file</button>
+        <button type="button" disabled={busy} onClick={() => create('directory')}>New directory</button>
         <label className="upload-button">Upload new file <input aria-label="Upload new file" type="file" disabled={busy} onChange={event => {
           const uploadFile = event.target.files?.[0]; event.target.value = '';
           if (uploadFile) void run(() => upload(uploadFile));
@@ -193,8 +246,12 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
               <button className="primary" disabled={busy || !isDirty(file)} onClick={save}>Save to server</button>
             </div>
             {files.map(item => <div className="file-editor-host" key={item.path} hidden={item.path !== activePath}>
-              <Suspense fallback={<p>Loading editor…</p>}><Monaco path={item.path} value={item.draft} readOnly={busy}
-                change={draft => setFiles(previous => previous.map(openFile => openFile.path === item.path ? { ...openFile, draft } : openFile))}
+              <Suspense fallback={<p>Loading editor…</p>}><Monaco path={item.path} value={item.draft} readOnly={busy} active={item.path === activePath}
+                change={draft => {
+                  const next = filesRef.current.map(openFile => openFile.path === item.path ? { ...openFile, draft } : openFile);
+                  filesRef.current = next;
+                  setFiles(next);
+                }}
                 save={item.path === activePath ? save : () => {}} /></Suspense>
             </div>)}
           </> : <div className="workspace-empty">Select a UTF-8 text file to edit. Save uploads your changes.</div>}
@@ -203,6 +260,7 @@ export function FileBrowser({ connection }: { connection: FileConnection }) {
     </>}
     {busy && <small role="status">Working…</small>}
     {error && <p role="alert" className="file-message error">{error}</p>}
+    {credentialError && <p role="alert" className="file-message error">{credentialError}</p>}
     {notice && <p role="status" className="file-message">{notice}</p>}
   </div>;
 }

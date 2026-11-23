@@ -16,7 +16,7 @@ test('agent terminal access is scoped to a registered session and single-line co
   assert.throws(() => terminalSend('fixture', 'pwd'), /connect/);
 });
 
-test('agent file actions protect open drafts and use the existing revision-aware API', async t => {
+test('agent file actions update open drafts only when their snapshot still matches', async t => {
   const original = globalThis.fetch;
   const calls = [];
   globalThis.fetch = async (path, options) => {
@@ -25,10 +25,23 @@ test('agent file actions protect open drafts and use the existing revision-aware
     return new Response(null, { status: 204 });
   };
   t.after(() => { globalThis.fetch = original; });
-  const unregister = registerAgentFiles('fixture', { session: 'local-session', openPaths: new Set(['/open.txt']) });
+  let draft = { content: 'unsaved edit', revision: 'b'.repeat(64) };
+  const unregister = registerAgentFiles('fixture', {
+    session: 'local-session',
+    readOpen: path => path === '/open.txt' ? draft : undefined,
+    applyOpen: (_path, expected, content) => {
+      if (draft.content !== expected.content || draft.revision !== expected.revision) throw new Error('conflict');
+      draft = { ...draft, content };
+    },
+  });
   t.after(unregister);
   const file = await fileRead('fixture', '/test.txt');
-  await assert.rejects(() => fileWrite('fixture', '/open.txt', 'draft', file.revision), /Close this file/);
+  const open = await fileRead('fixture', '/other/../open.txt');
+  assert.equal(open.content, 'unsaved edit');
+  await fileWrite('fixture', '/open.txt', 'agent edit', open.revision, open);
+  assert.equal(draft.content, 'agent edit');
+  await assert.rejects(() => fileWrite('fixture', '/open.txt', 'overwrite', open.revision, open), /conflict/);
+  await assert.rejects(() => fileWrite('fixture', '/open.txt', 'overwrite', file.revision, file), /editor state changed/);
   await fileWrite('fixture', '/test.txt', 'updated', file.revision);
   await fileCreate('fixture', '/new.txt', 'new é');
   assert.equal(calls[1].path, '/api/files/local-session/save');

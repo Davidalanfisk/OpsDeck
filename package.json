@@ -1,6 +1,6 @@
 {
   "name": "opsdeck",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "main": "desktop-dist/main.cjs",
   "private": true,
   "type": "module",

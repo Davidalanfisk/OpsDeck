@@ -1,4 +1,4 @@
-import { BrowserWindow, WebContentsView, dialog, ipcMain, session, shell } from 'electron';
+import { BrowserWindow, WebContentsView, dialog, ipcMain, safeStorage, session, shell } from 'electron';
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents, WebPreferences } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { Readable } from 'node:stream';
 import type { BrowserBounds, BrowserState } from '../shared/desktop.ts';
 import { createOpsDeckServer } from '../server/app.ts';
 import { browserProfiles } from './browser-profiles.ts';
+import { fileCredentialStorage } from './file-credentials.ts';
 import { createOllama } from './ollama.ts';
 import type { createSourceUpdater } from './source-updater.ts';
 import { z } from 'zod';
@@ -42,6 +43,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   const { server, db } = createOpsDeckServer({
     directory, frontend, origin,
     authorize: request => request.headers.host === host && request.headers[authHeader] === token,
+    fileCredentialStorage: fileCredentialStorage(safeStorage, process.platform),
   });
   let browserActivity: ReturnType<typeof browserProfiles>;
   try {

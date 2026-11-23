@@ -4,10 +4,11 @@ import type { DatabaseSync } from 'node:sqlite';
 import { Router, json } from 'express';
 import type { Request, Response } from 'express';
 import { z, ZodError } from 'zod';
-import { connectionInput } from '../shared/model.ts';
 import { maxTextBytes, maxTransferBytes } from '../shared/files.ts';
 import { connectFiles, FileError, fileError, revision } from './file-transport.ts';
 import type { RemoteTransport } from './file-transport.ts';
+import { credentialStore } from './credentials.ts';
+import type { FileCredentialStorage } from './credentials.ts';
 
 const remotePath = z.string().min(1).max(4096).startsWith('/').regex(/^[^\0\r\n]*$/).transform(path => posix.normalize(path));
 const pathInput = z.object({ path: remotePath });
@@ -15,12 +16,14 @@ const credentials = z.object({
   clientId: z.string().uuid(), connectionId: z.string().uuid(),
   password: z.string().min(1).max(4096).regex(/^[^\0\r\n]*$/).optional(),
   allowInsecure: z.literal(true).optional(),
+  remember: z.literal(true).optional(),
 });
 const saveInput = pathInput.extend({ content: z.string().max(maxTextBytes), revision: z.string().regex(/^[a-f0-9]{64}$/) });
 const uploadInput = pathInput.extend({ data: z.string().max(Math.ceil(maxTransferBytes / 3) * 4).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/) });
 const idleTimeout = 15 * 60 * 1000;
 
-export function fileApi(db: DatabaseSync) {
+export function fileApi(db: DatabaseSync, storage?: FileCredentialStorage) {
+  const credentialsStore = credentialStore(db, storage);
   const router = Router();
   router.use(json({ limit: '15mb' }));
   type Session = { remote: RemoteTransport; clientId: string; connectionId: string; settings: string; used: number; busy: boolean };
@@ -42,14 +45,30 @@ export function fileApi(db: DatabaseSync) {
     }
   };
 
+  const identity = z.object({ clientId: z.string().uuid(), connectionId: z.string().uuid() });
+  router.get('/credentials', route(async (req, res) => {
+    const input = identity.parse(req.query);
+    const { hash } = credentialsStore.connectionFor(input.clientId, input.connectionId);
+    res.json(credentialsStore.status(input.connectionId, hash));
+  }));
+  router.delete('/credentials', route(async (req, res) => {
+    const input = identity.parse(req.body);
+    credentialsStore.connectionFor(input.clientId, input.connectionId);
+    credentialsStore.forget(input.connectionId);
+    res.sendStatus(204);
+  }));
+
   router.post('/connect', route(async (req, res) => {
     const input = credentials.parse(req.body);
     if (sessions.size + connecting.size >= 12) throw new FileError('Too many file connections are open.', 429);
-    const row = db.prepare('SELECT * FROM connections WHERE client_id = ? AND id = ?').get(input.clientId, input.connectionId);
-    const parsed = connectionInput.safeParse(row);
-    if (!parsed.success || !('host' in parsed.data)) throw new FileError('File connection not found.', 404);
-    const connection = parsed.data;
-    if (parsed.data.type === 'FTP' && !input.allowInsecure) throw new FileError('FTP sends passwords and files unencrypted. Confirm this risk before connecting.', 400);
+    const { row, connection, hash } = credentialsStore.connectionFor(input.clientId, input.connectionId);
+    if (connection.type === 'FTP' && !input.allowInsecure) throw new FileError('FTP sends passwords and files unencrypted. Confirm this risk before connecting.', 400);
+    if (input.remember && 'auth_method' in connection && connection.auth_method === 'agent') throw new FileError('SSH agent connections do not use saved passwords.', 400);
+    if (input.remember && (!input.password || !credentialsStore.available())) throw new FileError('Secure password storage is unavailable or no password was supplied.', 400);
+    let password = input.password;
+    if (!password && !('auth_method' in connection && connection.auth_method === 'agent')) {
+      password = credentialsStore.password(input.connectionId, hash);
+    }
     const key = randomUUID();
     connecting.add(key);
     let remote: RemoteTransport | undefined;
@@ -57,7 +76,7 @@ export function fileApi(db: DatabaseSync) {
     try {
       const path = await Promise.race([
         (async () => {
-          remote = await connectFiles({ ...connection, id: input.connectionId, client_id: input.clientId, created_at: '', updated_at: '' }, input.password);
+          remote = await connectFiles({ ...connection, id: input.connectionId, client_id: input.clientId, created_at: '', updated_at: '' }, password);
           if (!connecting.has(key)) { remote.close(); throw new FileError('File connection was cancelled.'); }
           return remotePath.parse(await remote.pwd());
         })(),
@@ -68,6 +87,9 @@ export function fileApi(db: DatabaseSync) {
       if (!remote || !connecting.has(key)) throw new FileError('File connection was cancelled.');
       const current = db.prepare('SELECT * FROM connections WHERE client_id = ? AND id = ?').get(input.clientId, input.connectionId);
       if (!current || JSON.stringify(row) !== JSON.stringify(current)) throw new FileError('Connection settings changed. Reconnect to continue.', 410);
+      if (input.remember && password) {
+        credentialsStore.save(input.connectionId, hash, password);
+      }
       sessions.set(key, { remote, clientId: input.clientId, connectionId: input.connectionId, settings: JSON.stringify(row), used: Date.now(), busy: false });
       res.json({ session: key, path });
     } catch (error) { remote?.close(); throw error; }
@@ -131,6 +153,12 @@ export function fileApi(db: DatabaseSync) {
     if (data.length > maxTransferBytes) throw new FileError('Transfers are limited to 10 MiB.', 413);
     // Creating only: existing files must be opened and saved with conflict detection.
     await operate(req, remote => remote.write(input.path, data, null));
+    res.sendStatus(204);
+  }));
+  router.post('/:sessionId/mkdir', route(async (req, res) => {
+    const { path } = pathInput.parse(req.body);
+    if (path === '/') throw new FileError('Choose a directory name.', 400);
+    await operate(req, remote => remote.mkdir(path));
     res.sendStatus(204);
   }));
   return {

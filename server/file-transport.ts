@@ -32,6 +32,7 @@ export type RemoteTransport = {
   list: (path: string) => Promise<RemoteEntry[]>;
   read: (path: string, limit: number) => Promise<Buffer>;
   write: (path: string, data: Buffer, expected: string | null) => Promise<void>;
+  mkdir: (path: string) => Promise<void>;
   close: () => void;
 };
 
@@ -111,6 +112,7 @@ async function sshTransport(connection: Extract<FileConnection, { type: 'SSH' | 
       })));
     })),
     read,
+    mkdir: path => callback(cb => sftp.mkdir(path, cb)),
     async write(path, data, expected) {
       const before = await exists(path);
       if (expected === null ? Boolean(before) : !before || revision(await read(path, maxTransferBytes)) !== expected) {
@@ -166,6 +168,7 @@ export async function connectFiles(connection: FileConnection, password?: string
   };
   return {
     pwd: () => ftp.pwd(), list, read,
+    async mkdir(path) { await ftp.send(`MKD ${path}`); },
     async write(path, data, expected) {
       const before = await exists(path);
       if (expected === null ? Boolean(before) : !before || revision(await read(path, maxTransferBytes)) !== expected) {

@@ -148,6 +148,7 @@ small, .muted { color: var(--muted); }
 .agent-message.action, .agent-message.error { align-self: flex-start; background: #1b2230; }
 .agent-message strong { color: var(--muted); font-size: .7rem; text-transform: uppercase; }
 .agent-message pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: 3px 0 0; font: inherit; }
+.agent-instructions { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .agent-message.error { color: #ffb1b8; }
 .agent-thinking { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: .8rem; }
 .agent-spinner { width: 13px; height: 13px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: agent-spin .8s linear infinite; }

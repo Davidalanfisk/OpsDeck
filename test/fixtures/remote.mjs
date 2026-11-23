@@ -44,6 +44,10 @@ export async function ftpFixture(t, tls) {
       else if (['TYPE', 'STRU', 'PBSZ', 'PROT', 'OPTS', 'SITE'].includes(command)) reply('200 OK');
       else if (command === 'PWD') reply('257 "/"');
       else if (command === 'CWD') reply('250 Directory changed');
+      else if (command === 'MKD') {
+        if (directories.has(arg) || files.has(arg)) reply('550 Already exists');
+        else { directories.add(arg); reply('257 Created'); }
+      }
       else if (command === 'EPSV') {
         passive = secure ? tlsServer(tls) : netServer();
         dataServers.add(passive);
@@ -104,6 +108,7 @@ export async function ftpFixture(t, tls) {
 
 export async function sftpFixture(t, identity) {
   const files = new Map([['/fixture.php', Buffer.from(text)], ['/binary.bin', Buffer.from([0, 255, 1])]]);
+  const directories = new Set(['/']);
   const modes = new Map([['/fixture.php', 0o100640]]);
   const clients = new Set();
   const offered = [];
@@ -124,25 +129,36 @@ export async function sftpFixture(t, identity) {
     });
     client.on('session', accept => {
       const session = accept();
+      session.on('pty', acceptPty => acceptPty());
+      session.on('shell', acceptShell => {
+        const channel = acceptShell();
+        channel.on('data', data => channel.write(data));
+      });
       session.on('sftp', acceptSftp => {
         const stream = acceptSftp();
         const handles = new Map();
         let sequence = 0;
-        const attrs = path => ({ mode: path === '/' ? 0o040755 : modes.get(path) ?? 0o100600, size: files.get(path)?.length ?? 0, uid: 0, gid: 0, atime: 1, mtime: 1 });
+        const attrs = path => ({ mode: directories.has(path) ? 0o040755 : modes.get(path) ?? 0o100600, size: files.get(path)?.length ?? 0, uid: 0, gid: 0, atime: 1, mtime: 1 });
         const status = (id, code = 0) => stream.status(id, code);
         const createHandle = (id, value) => {
           const handle = Buffer.alloc(4); handle.writeUInt32BE(++sequence);
           handles.set(handle.toString('hex'), value); stream.handle(id, handle);
         };
         stream.on('REALPATH', (id, path) => stream.name(id, [{ filename: path === '.' ? '/' : path, longname: '', attrs: attrs('/') }]));
-        const stat = (id, path) => files.has(path) || path === '/' ? stream.attrs(id, attrs(path)) : status(id, 2);
+        const stat = (id, path) => files.has(path) || directories.has(path) ? stream.attrs(id, attrs(path)) : status(id, 2);
         stream.on('STAT', stat); stream.on('LSTAT', stat);
-        stream.on('OPENDIR', (id, path) => path === '/' ? createHandle(id, { dir: true }) : status(id, 2));
+        stream.on('OPENDIR', (id, path) => directories.has(path) ? createHandle(id, { dir: true, path }) : status(id, 2));
         stream.on('READDIR', (id, handle) => {
           const value = handles.get(handle.toString('hex'));
           if (value.done) { status(id, 1); return; }
           value.done = true;
-          stream.name(id, [...files].map(([path]) => ({ filename: path.slice(1), longname: '', attrs: attrs(path) })));
+          const prefix = value.path === '/' ? '/' : `${value.path}/`;
+          const paths = [...directories, ...files.keys()].filter(path => path.startsWith(prefix) && path !== value.path && !path.slice(prefix.length).includes('/'));
+          stream.name(id, paths.map(path => ({ filename: path.slice(prefix.length), longname: '', attrs: attrs(path) })));
+        });
+        stream.on('MKDIR', (id, path) => {
+          if (directories.has(path) || files.has(path)) status(id, 4);
+          else { directories.add(path); status(id); }
         });
         stream.on('OPEN', (id, path, flags, info) => {
           if (flags & 8) {
@@ -181,5 +197,5 @@ export async function sftpFixture(t, identity) {
     for (const client of clients) client.end();
     await new Promise(resolve => server.close(resolve));
   });
-  return { files, modes, offered, connection: { ...settings, type: 'SFTP', port: server.address().port, fingerprint, auth_method: 'password' } };
+  return { files, directories, modes, offered, connection: { ...settings, type: 'SFTP', port: server.address().port, fingerprint, auth_method: 'password' } };
 }

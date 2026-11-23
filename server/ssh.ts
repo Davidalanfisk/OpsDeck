@@ -7,16 +7,19 @@ import { z } from 'zod';
 import { connectionInput } from '../shared/model.ts';
 import { keyFingerprint } from './ssh-agent.ts';
 import { sshAuthentication, sshErrorDetail } from './ssh-auth.ts';
+import { credentialStore } from './credentials.ts';
+import type { FileCredentialStorage } from './credentials.ts';
 
 const dimensions = { cols: z.number().int().min(2).max(1000), rows: z.number().int().min(1).max(500) };
 const message = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('connect'), password: z.string().min(1).max(4096).optional(), ...dimensions }),
+  z.object({ type: z.literal('connect'), password: z.string().min(1).max(4096).optional(), remember: z.literal(true).optional(), ...dimensions }),
   z.object({ type: z.literal('resize'), ...dimensions }),
   z.object({ type: z.literal('input'), data: z.string().max(48 * 1024) }),
 ]);
 
 export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origin?: string, host?: string) => boolean,
-  authorize?: (request: IncomingMessage) => boolean) {
+  authorize?: (request: IncomingMessage) => boolean, storage?: FileCredentialStorage) {
+  const credentials = credentialStore(db, storage);
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
   server.on('upgrade', (req, socket, head) => {
     const route = /^\/ssh\/([\w-]+)\/([\w-]+)$/.exec(req.url ?? '');
@@ -32,6 +35,8 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
       return;
     }
     const connection = target.data;
+    const clientId = route[1], connectionId = route[2];
+    const { hash } = credentials.connectionFor(clientId, connectionId);
     const { host, port, username, fingerprint } = connection;
     sockets.handleUpgrade(req, socket, head, ws => {
       const ssh = new Client();
@@ -39,6 +44,7 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
       let started = false;
       let alive = true;
       let verified = false;
+      let passwordToSave: string | undefined;
       let cols = 80;
       let rows = 24;
       const authTimeout = setTimeout(() => ws.close(1008, 'Connect request timed out'), 10_000);
@@ -56,6 +62,7 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
       ws.on('close', () => {
         clearTimeout(authTimeout);
         clearInterval(heartbeat);
+        passwordToSave = undefined;
         shell?.close();
         ssh.destroy();
       });
@@ -64,6 +71,17 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
       ssh.on('ready', () => {
         ssh.shell({ term: 'xterm-256color', cols, rows }, (error, channel) => {
           if (error) { fail('The server refused to open a terminal.'); return; }
+          if (ws.readyState !== WebSocket.OPEN) { channel.close(); return; }
+          try {
+            if (credentials.connectionFor(clientId, connectionId).hash !== hash) throw new Error('Connection settings changed. Reconnect to continue.');
+            if (passwordToSave) credentials.save(connectionId, hash, passwordToSave);
+          } catch (error) {
+            passwordToSave = undefined;
+            channel.close();
+            fail(error instanceof Error ? error.message : 'Could not securely save the password.');
+            return;
+          }
+          passwordToSave = undefined;
           shell = channel;
           function output(data: Buffer) {
             if (ws.readyState !== WebSocket.OPEN) return;
@@ -90,7 +108,20 @@ export function attachSsh(server: Server, db: DatabaseSync, allowsOrigin: (origi
           clearTimeout(authTimeout);
           ({ cols, rows } = data);
           let authentication;
-          try { authentication = await sshAuthentication(connection, data.password); }
+          try {
+            if (credentials.connectionFor(clientId, connectionId).hash !== hash) throw new Error('Connection settings changed. Reconnect to continue.');
+            if (data.remember && connection.auth_method === 'agent') {
+              throw new Error('SSH agent connections do not use saved passwords.');
+            }
+            if (data.remember && (!data.password || !credentials.available())) {
+              throw new Error('Secure password storage is unavailable or no password was supplied.');
+            }
+            const password = connection.auth_method === 'password'
+              ? data.password ?? credentials.password(connectionId, hash) : undefined;
+            if (data.remember) passwordToSave = data.password;
+            authentication = await sshAuthentication(connection, password);
+            if (credentials.connectionFor(clientId, connectionId).hash !== hash) throw new Error('Connection settings changed. Reconnect to continue.');
+          }
           catch (error) { if (ws.readyState === WebSocket.OPEN) fail(error instanceof Error ? error.message : 'SSH authentication unavailable.'); return; }
           if (ws.readyState !== WebSocket.OPEN) return;
           try {

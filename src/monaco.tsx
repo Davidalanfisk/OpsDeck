@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor/editor/editor.api.js';
 // Register contributions before the first editor initializes Monaco's services.
 import 'monaco-editor/internal/common/workers.js';
@@ -22,11 +22,13 @@ const languages: Record<string, string> = {
   json: 'json', md: 'markdown', sh: 'shell', py: 'python', xml: 'xml', yml: 'yaml', yaml: 'yaml',
 };
 
-export function Monaco({ path, value, readOnly, change, save }: {
-  path: string; value: string; readOnly: boolean; change: (content: string) => void; save: () => void;
+export function Monaco({ path, value, readOnly, active, change, save }: {
+  path: string; value: string; readOnly: boolean; active: boolean; change: (content: string) => void; save: () => void;
 }) {
   const mount = useRef<HTMLDivElement>(null);
   const editor = useRef<monaco.editor.IStandaloneCodeEditor>(null);
+  const modelRef = useRef<monaco.editor.ITextModel>(null);
+  const viewState = useRef<monaco.editor.ICodeEditorViewState | null>(null);
   const onChange = useRef(change);
   const onSave = useRef(save);
   onChange.current = change;
@@ -35,17 +37,32 @@ export function Monaco({ path, value, readOnly, change, save }: {
     if (!mount.current) return;
     const extension = path.split('.').pop()?.toLowerCase() ?? '';
     const model = monaco.editor.createModel(value, languages[extension] ?? 'plaintext');
+    modelRef.current = model;
     const instance = monaco.editor.create(mount.current, {
-      model, theme: 'vs-dark', automaticLayout: true, minimap: { enabled: false },
+      model: active ? model : null, theme: 'vs-dark', automaticLayout: true, minimap: { enabled: false },
       fontSize: 13, scrollBeyondLastLine: false, readOnly,
     });
     editor.current = instance;
     const changed = model.onDidChangeContent(() => onChange.current(model.getValue(monaco.editor.EndOfLinePreference.TextDefined, true)));
     instance.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSave.current());
-    return () => { changed.dispose(); instance.dispose(); model.dispose(); editor.current = null; };
+    return () => { changed.dispose(); instance.dispose(); model.dispose(); editor.current = null; modelRef.current = null; };
   }, [path]);
+  useLayoutEffect(() => {
+    const instance = editor.current;
+    const model = modelRef.current;
+    if (!instance || !model) return;
+    if (!active && instance.getModel()) {
+      // A hidden editor can retain Monaco's text focus and receive another tab's keystrokes.
+      viewState.current = instance.saveViewState();
+      instance.setModel(null);
+    } else if (active && !instance.getModel()) {
+      instance.setModel(model);
+      instance.layout();
+      if (viewState.current) instance.restoreViewState(viewState.current);
+    }
+  }, [active, path]);
   useEffect(() => {
-    const model = editor.current?.getModel();
+    const model = modelRef.current;
     if (model && model.getValue(monaco.editor.EndOfLinePreference.TextDefined, true) !== value) model.setValue(value);
   }, [value, path]);
   useEffect(() => { editor.current?.updateOptions({ readOnly }); }, [readOnly]);

@@ -4,6 +4,8 @@ import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import type { SshConnection } from '../shared/model.ts';
 import { registerAgentTerminal } from './agent-sessions.ts';
+import { notifyCredentialChange, useConnectionCredentials } from './connection-credentials.ts';
+import { describe, request } from './state.ts';
 import '@xterm/xterm/css/xterm.css';
 
 export function SshTerminal({ connection }: { connection: SshConnection }) {
@@ -13,6 +15,8 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
   const connected = useRef(false);
   const [status, setStatus] = useState('Disconnected');
   const [busy, setBusy] = useState(false);
+  const [password, setPassword] = useState('');
+  const { credential, credentialError } = useConnectionCredentials(connection.client_id, connection.id);
   useEffect(() => {
     const element = mount.current;
     if (!element) return;
@@ -36,7 +40,7 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
         socket.current.send(JSON.stringify({ type: 'input', data: `${command}\r` }));
       },
     });
-    term.writeln(connection.auth_method === 'agent' ? 'OpsDeck SSH — connect using the selected agent identity.' : 'OpsDeck SSH — enter your password to connect.');
+    term.writeln(connection.auth_method === 'agent' ? 'OpsDeck SSH — connect using the selected agent identity.' : 'OpsDeck SSH — enter a password or use a saved password to connect.');
     const send = (data: object) => {
       if (socket.current?.readyState === WebSocket.OPEN) socket.current.send(JSON.stringify(data));
     };
@@ -73,8 +77,11 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
     const term = terminal.current;
     if (!term || socket.current) return;
     const form = event.currentTarget;
-    const password = connection.auth_method === 'password' ? String(new FormData(form).get('password')) : undefined;
+    const data = new FormData(form);
+    const enteredPassword = connection.auth_method === 'password' ? password || undefined : undefined;
+    const remember = data.get('remember') === 'on' || undefined;
     form.reset();
+    setPassword('');
     setBusy(true);
     setStatus('Connecting…');
     let failed = false;
@@ -82,12 +89,12 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
     const ws = new WebSocket(`${protocol}//${window.location.host}/ssh/${connection.client_id}/${connection.id}`);
     socket.current = ws;
     ws.binaryType = 'arraybuffer';
-    ws.onopen = () => ws.send(JSON.stringify({ type: 'connect', password, cols: term.cols, rows: term.rows }));
+    ws.onopen = () => ws.send(JSON.stringify({ type: 'connect', password: enteredPassword, remember, cols: term.cols, rows: term.rows }));
     ws.onmessage = event => {
       if (socket.current !== ws) return;
       if (event.data instanceof ArrayBuffer) { term.write(new Uint8Array(event.data)); return; }
       const data = JSON.parse(event.data);
-      if (data.state === 'connected') { connected.current = true; setStatus('Connected'); term.focus(); }
+      if (data.state === 'connected') { connected.current = true; setStatus('Connected'); if (remember) notifyCredentialChange(); term.focus(); }
       if (data.state === 'error') { failed = true; setStatus(data.detail); term.writeln(`\r\n${data.detail}`); }
     };
     ws.onerror = () => {
@@ -112,9 +119,21 @@ export function SshTerminal({ connection }: { connection: SshConnection }) {
         {connection.username}@{connection.host}:{connection.port} · <span role="status">{status}</span>
       </span>
       {busy ? <button type="button" onClick={() => socket.current?.close()}>Disconnect</button> : <>
-        {connection.auth_method === 'password' && <input aria-label="SSH password" type="password" name="password" placeholder="SSH password" required maxLength={4096} autoComplete="off" />}
+        {connection.auth_method === 'password' && <>
+          <input aria-label="SSH password" type="password" name="password" placeholder={credential?.saved && credential.available ? 'Saved password (optional)' : 'SSH password'} required={!credential?.saved || !credential.available} value={password} onChange={event => setPassword(event.target.value)} maxLength={4096} autoComplete="off" />
+          {credential?.available && <label><input type="checkbox" name="remember" disabled={!password} /> Save password securely</label>}
+          {credential && !credential.available && <span>Secure password storage unavailable.</span>}
+        </>}
+        {credential?.stored && <button type="button" onClick={() => {
+          setBusy(true);
+          void request('/files/credentials', 'DELETE', { clientId: connection.client_id, connectionId: connection.id })
+            .then(() => { notifyCredentialChange(); setStatus('Saved password removed'); })
+            .catch(error => setStatus(describe(error)))
+            .finally(() => setBusy(false));
+        }}>Forget saved password</button>}
         <button className="primary">Connect</button>
       </>}
     </form>
+    {credentialError && <p role="alert" className="error">{credentialError}</p>}
   </div>;
 }
