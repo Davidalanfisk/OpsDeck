@@ -27,6 +27,8 @@ small, .muted { color: var(--muted); }
 .danger, .error { color: #ffb1b8; }
 .truncate { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .spacer { flex: 1; }
+.update-controls { position: relative; }
+.update-popover[open] { display: grid; gap: 8px; }
 .eyebrow, .header-label { color: var(--muted); font-size: .73rem; font-weight: 700; letter-spacing: .12em; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
 .online { background: #66d8a8; margin-right: 4px; }

@@ -1,6 +1,6 @@
 {
   "name": "opsdeck",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "main": "desktop-dist/main.cjs",
   "private": true,
   "type": "module",
@@ -12,7 +12,8 @@
     "start": "node server/index.ts",
     "test": "node --test",
     "build:desktop": "npm run build && node desktop/build.mjs",
-    "start:desktop": "electron .",
+    "start:desktop": "node scripts/start-desktop.mjs",
+    "package:source-update": "node scripts/package-source-update.ts",
     "setup:ollama": "node scripts/setup-ollama.ts",
     "package:desktop": "npm run build:desktop && electron-builder --publish never",
     "test:desktop": "electron desktop-dist/smoke.cjs"

@@ -7,6 +7,7 @@ import type { BrowserBounds, BrowserState } from '../shared/desktop.ts';
 import { createOpsDeckServer } from '../server/app.ts';
 import { browserProfiles } from './browser-profiles.ts';
 import { createOllama } from './ollama.ts';
+import type { createSourceUpdater } from './source-updater.ts';
 import { z } from 'zod';
 
 const secure: WebPreferences = {
@@ -33,7 +34,8 @@ function browserBounds(value: unknown, width: number, height: number): BrowserBo
   return { x, y, width: w, height: h };
 }
 
-export async function startDesktop(directory: string, frontend: string, port = 43139, testOllama?: ReturnType<typeof createOllama>) {
+export async function startDesktop(directory: string, frontend: string, port = 43139, testOllama?: ReturnType<typeof createOllama>,
+  updater?: ReturnType<typeof createSourceUpdater>) {
   const host = `127.0.0.1:${port}`;
   const origin = `http://${host}`;
   const token = randomBytes(32).toString('hex');
@@ -103,6 +105,25 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   const requireTrusted = (event: IpcMainInvokeEvent) => {
     if (!trusted(event)) throw new Error('Untrusted agent request.');
   };
+  ipcMain.handle('update:status', event => {
+    requireTrusted(event);
+    return updater?.status() ?? { phase: 'idle', current: '', supported: false, detail: 'Updates are unavailable in this desktop build.' };
+  });
+  ipcMain.handle('update:check', event => {
+    requireTrusted(event);
+    if (!updater) throw new Error('Updates are unavailable in this desktop build.');
+    return updater.check();
+  });
+  ipcMain.handle('update:prepare', event => {
+    requireTrusted(event);
+    if (!updater) throw new Error('Updates are unavailable in this desktop build.');
+    return updater.prepare();
+  });
+  ipcMain.handle('update:restart', event => {
+    requireTrusted(event);
+    if (!updater) throw new Error('Updates are unavailable in this desktop build.');
+    return updater.restart(window);
+  });
   ipcMain.handle('agent:status', event => { requireTrusted(event); return ollama.status(); });
   ipcMain.handle('agent:setup', async (event, model: unknown) => { requireTrusted(event); await ollama.setup(model); });
   ipcMain.handle('agent:chat', async (event, messages: unknown, tools: unknown) => {
@@ -371,6 +392,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     }
   });
   window.on('closed', () => {
+    void updater?.close();
     agentRequest?.abort();
     ollama.close();
     pending.clear();
@@ -380,6 +402,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     }
     clearInterval(profileTimer);
     ipcMain.removeHandler('browser:open');
+    for (const name of ['status', 'check', 'prepare', 'restart']) ipcMain.removeHandler(`update:${name}`);
     ipcMain.removeHandler('browser:action');
     ipcMain.removeHandler('agent:status');
     ipcMain.removeHandler('agent:setup');

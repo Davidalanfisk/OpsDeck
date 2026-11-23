@@ -1,6 +1,8 @@
 import { app, dialog } from 'electron';
 import { join } from 'node:path';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { startDesktop } from './window.ts';
+import { createSourceUpdater } from './source-updater.ts';
 
 app.setName('OpsDeck');
 if (!app.requestSingleInstanceLock()) {
@@ -8,7 +10,21 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('window-all-closed', () => app.quit());
   void app.whenReady().then(async () => {
-    const { window } = await startDesktop(join(app.getPath('userData'), 'workspace'), join(app.getAppPath(), 'dist'));
+    const source = app.getAppPath();
+    const updater = createSourceUpdater(join(app.getPath('userData'), 'source-updates'), source, app.getVersion(),
+      !app.isPackaged && process.platform === 'darwin' && process.arch === 'arm64');
+    await updater.initialize().catch(error => dialog.showErrorBox('OpsDeck updater setup failed',
+      `${error instanceof Error ? error.message : 'Unknown error'}\nOpsDeck will still open; automatic updates may not work.`));
+    const { window } = await startDesktop(join(app.getPath('userData'), 'workspace'), join(source, 'dist'), 43139, undefined, updater);
+    if (process.env.OPSDECK_UPDATE_READY) await writeFile(process.env.OPSDECK_UPDATE_READY, 'ready', { flag: 'wx', mode: 0o600 });
+    const updateError = join(app.getPath('userData'), 'source-updates', 'last-error.txt');
+    try {
+      const message = await readFile(updateError, 'utf8');
+      dialog.showErrorBox('OpsDeck update failed', message);
+      await rm(updateError);
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
+    }
     app.on('second-instance', () => {
       if (window.isMinimized()) window.restore();
       window.focus();

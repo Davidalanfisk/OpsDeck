@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopBridge } from '../shared/desktop.ts';
 
 const bridge: DesktopBridge = {
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updatePrepare: () => ipcRenderer.invoke('update:prepare'),
+  updateRestart: () => ipcRenderer.invoke('update:restart'),
   open: (id, clientId, url) => ipcRenderer.invoke('browser:open', id, clientId, url),
   release: id => ipcRenderer.send('browser:release', id),
   layout: (id, bounds) => ipcRenderer.send('browser:layout', id, bounds),

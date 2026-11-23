@@ -96,10 +96,10 @@ Install Docker for your platform and start its engine:
 | macOS | Install [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/), choosing the Apple silicon or Intel download for your Mac. Start Docker Desktop and run the commands below in Terminal. |
 | Linux | Install [Docker Engine](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) for your distribution. Run the commands below as a user with access to the Docker daemon. |
 
-Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.5.2` release with Git:
+Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.6.0` release with Git:
 
 ```sh
-git clone --branch v0.5.2 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+git clone --branch v0.6.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
 cd OpsDeck
 ```
 
@@ -159,6 +159,18 @@ npm run dev:api
 In another terminal, run `npm run dev` and open [http://localhost:5173](http://localhost:5173). `npm run build` type-checks and builds the frontend; `npm start` serves it with the API. `npm test` runs the SQLite, SSH and file transfer integration tests using local fixtures and requires `ssh-agent`, `ssh-add`, `ssh-keygen` and `openssl` on PATH. For direct Node runs, use `HOST`, `PORT` and `DATA_DIR` to override the defaults (`127.0.0.1`, `3000`, `data`).
 
 For Electron, run `npm run build:desktop` and `npm run start:desktop`. Run `npm run test:desktop` after building to exercise the workspace and top-level website pane using a local fixture. `npm run package:desktop` creates a ZIP in `release/` on macOS or Windows. The desktop backend uses loopback port `43139` and only accepts requests from its trusted workspace browser session.
+
+### macOS source updates
+
+Apple silicon source installs can check the public `Davidalanfisk/OpsDeck-updates` feed at launch or from **Updates**. An available update is announced, not installed automatically. Choose **Download and build update**, then **Restart and install** when ready. Save remote drafts first; restart disconnects SSH/file sessions and ends agent conversations.
+
+The first updater-capable version must be installed manually and launched with `npm run start:desktop`. It preserves a private Node/npm runtime under `~/Library/Application Support/OpsDeck/source-updates`, downloads a checksum-verified source package, and runs `npm ci` and the production build in an isolated version folder. Updating does not replace the original checkout, SQLite data, website profiles or Ollama models. The SHA-256 verifies integrity against the HTTPS feed; it is not a publisher signature. Trust the update repository and its maintainers: downloaded source and dependency install scripts execute as your user.
+
+After the first updater-enabled launch, use the generated `~/Library/Application Support/OpsDeck/source-updates/OpsDeck.command` for future launches, and use that launcher for a Dock shortcut. It uses the retained Node runtime rather than one in Downloads. After installation, the original checkout's `npm run start:desktop` also follows the installed version pointer. The updater retains the previous version and restores it if the new app fails its startup check within 60 seconds; it reports rollback on the next successful launch. Startup checks confirm the app opened, not every feature. If a managed device blocks Node or Electron, this updater does not bypass that policy.
+
+This updater is for macOS Apple silicon **source installs**, not packaged `.app`/Windows builds or Docker. It requires internet access and enough disk space for another full source/dependency build. A missing or inaccessible public feed is reported as an update-check error, not as "up to date."
+
+To prepare public source packages from a reviewed commit, run `npm run package:source-update -- <commit-or-tag>`. It reads allowlisted tracked files from that revision, never local `data`, `.env`, `node_modules`, website profiles or models. It produces a `.json.gz` for in-app updates and a normal source ZIP for the one-time manual bootstrap. Publish both packages under `packages/` in the public update repository **before** publishing the generated `latest.json` at the repository root. Review the published source for confidential content; generic fixture data is included. GitHub Releases and authentication are not required for this feed.
 
 Window implementations are registered in `src/panels.tsx`. Dockview layouts reference stored item IDs, while SQLite, the JSON API and the SSH transport remain separate from the window renderer.
 

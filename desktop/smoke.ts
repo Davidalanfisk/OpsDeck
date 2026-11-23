@@ -98,6 +98,18 @@ void app.whenReady().then(async () => {
     origin: () => ({ origin: modelOrigin, model: 'qwen3:8b' as const }),
     close: () => {},
   };
+  let updateState: import('../shared/update.ts').UpdateStatus = {
+    phase: 'idle', current: '0.5.2', supported: false, detail: 'Fixture updater idle',
+  };
+  let preparedUpdates = 0;
+  const fakeUpdater = {
+    status: () => updateState,
+    initialize: async () => {},
+    check: async () => { updateState = { ...updateState, phase: 'available', latest: '0.6.0', detail: 'Fixture update available' }; },
+    prepare: async () => { preparedUpdates++; updateState = { ...updateState, phase: 'ready', detail: 'Fixture update ready' }; },
+    restart: async (_window: BrowserWindow) => {},
+    close: async () => {},
+  };
   const site = createServer((request, response) => {
     response.setHeader('X-Frame-Options', 'DENY');
     response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
@@ -117,7 +129,7 @@ void app.whenReady().then(async () => {
   const directory = join(temporary, 'workspace');
   let window: BrowserWindow | undefined;
   try {
-    const desktop = await startDesktop(directory, resolve('dist'), 43139, fakeOllama);
+    const desktop = await startDesktop(directory, resolve('dist'), 43139, fakeOllama, fakeUpdater);
     window = desktop.window;
     const workspace = window.webContents;
     const rendererErrors: string[] = [];
@@ -322,6 +334,7 @@ void app.whenReady().then(async () => {
     workspace.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: ['shift'] });
     workspace.sendInputEvent({ type: 'char', keyCode: '\r', modifiers: ['shift'] });
     workspace.sendInputEvent({ type: 'keyUp', keyCode: 'Enter', modifiers: ['shift'] });
+    await until(() => workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').value === 'List\\n'`));
     await workspace.insertText('workspace');
     assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent instruction"]').value`), 'List\nworkspace');
     workspace.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' });
@@ -378,6 +391,18 @@ void app.whenReady().then(async () => {
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Close agent"]').click()`);
     await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-panel')`));
     assert.equal(await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect').then(() => false, () => true)`), true);
+    updateState = { ...updateState, supported: true };
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Updates').click()`);
+    await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('.update-popover button')).some(button => button.textContent === 'Check for updates' && !button.disabled)`));
+    await until(() => !freshPane.getVisible());
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.update-popover button')).find(button => button.textContent === 'Check for updates').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(Array.from(document.querySelectorAll('.update-popover button')).find(button => button.textContent === 'Download and build update'))`));
+    assert.equal(preparedUpdates, 0);
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.update-popover button')).find(button => button.textContent === 'Download and build update').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(Array.from(document.querySelectorAll('.update-popover button')).find(button => button.textContent === 'Restart and install'))`));
+    assert.equal(preparedUpdates, 1);
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Close update settings"]').click()`);
+    await until(() => freshPane.getVisible());
     console.log('Desktop: local agent, website opt-in, remote edits, draft safety and browser retention verified');
   } finally {
     window?.destroy();

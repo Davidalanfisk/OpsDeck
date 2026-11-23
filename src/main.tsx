@@ -4,6 +4,7 @@ import type { Client } from '../shared/model.ts';
 import { ClientEditor } from './editors.tsx';
 import { describe, refreshDeck, request, useOps } from './state.ts';
 import { WorkspaceView } from './workspace.tsx';
+import { Updates } from './updates.tsx';
 import './styles.css';
 
 function Dashboard() {
@@ -88,6 +89,7 @@ function App() {
       <button className="brand" onClick={() => navigate({})}><span className="brand-mark">▰</span> OpsDeck</button>
       <span className="header-label">CONTROL DESK</span>
       <span className="spacer" />
+      {window.opsDeckDesktop && <Updates />}
       <span className="header-label"><span className="dot online" /> SELF-HOSTED</span>
     </header>
     {error && <div role="alert" className="banner">{error}<button className="quiet" aria-label="Dismiss error" onClick={() => setError()}>×</button></div>}

@@ -3,6 +3,10 @@ export type BrowserState = { origin: string; loading: boolean; failed: boolean; 
 export type BrowserAction = 'back' | 'forward' | 'reload' | 'external';
 
 export type DesktopBridge = {
+  updateStatus: () => Promise<UpdateStatus>;
+  updateCheck: () => Promise<void>;
+  updatePrepare: () => Promise<void>;
+  updateRestart: () => Promise<void>;
   open: (id: string, clientId: string, url: string) => Promise<void>;
   release: (id: string) => void;
   layout: (id: string, bounds: BrowserBounds | null) => void;
@@ -16,3 +20,4 @@ export type DesktopBridge = {
   agentWebsite: (id: string, action: 'inspect' | 'click' | 'type', index?: number, value?: string) => Promise<string>;
 };
 import type { AgentMessage, AgentTool, OllamaModel, OllamaStatus } from './ollama.ts';
+import type { UpdateStatus } from './update.ts';
