@@ -112,6 +112,7 @@ export async function sftpFixture(t, identity) {
   const modes = new Map([['/fixture.php', 0o100640]]);
   const clients = new Set();
   const offered = [];
+  const authAttempts = [];
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048, privateKeyEncoding: { type: 'pkcs1', format: 'pem' } });
   const fingerprint = `SHA256:${createHash('sha256').update(ssh2.utils.parseKey(privateKey).getPublicSSH()).digest('base64').replace(/=+$/, '')}`;
   const server = new ssh2.Server({ hostKeys: [privateKey] }, client => {
@@ -119,6 +120,7 @@ export async function sftpFixture(t, identity) {
     client.on('error', () => {});
     client.on('close', () => clients.delete(client));
     client.on('authentication', context => {
+      authAttempts.push(context.method);
       if (identity && context.method === 'publickey') {
         offered.push(context.key.data);
         if (context.username === 'operator' && context.key.data.equals(identity.getPublicSSH()) &&
@@ -197,5 +199,5 @@ export async function sftpFixture(t, identity) {
     for (const client of clients) client.end();
     await new Promise(resolve => server.close(resolve));
   });
-  return { files, directories, modes, offered, connection: { ...settings, type: 'SFTP', port: server.address().port, fingerprint, auth_method: 'password' } };
+  return { files, directories, modes, offered, authAttempts, connection: { ...settings, type: 'SFTP', port: server.address().port, fingerprint, auth_method: 'password' } };
 }

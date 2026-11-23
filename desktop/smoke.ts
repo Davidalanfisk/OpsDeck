@@ -9,7 +9,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { setTimeout as delay } from 'node:timers/promises';
 import { app, BrowserWindow, dialog } from 'electron';
 import { startDesktop } from './window.ts';
-import { ftpFixture, text } from '../test/fixtures/remote.mjs';
+import { ftpFixture, sftpFixture, text } from '../test/fixtures/remote.mjs';
 
 const temporary = process.env.OPSDECK_SMOKE_PROFILE ?? join(process.cwd(), `.opsdeck-desktop-${randomUUID()}`);
 mkdirSync(temporary, { recursive: true });
@@ -28,6 +28,7 @@ async function until<T>(check: () => T | Promise<T>): Promise<NonNullable<T>> {
 void app.whenReady().then(async () => {
   const cleanups: Array<() => Promise<void>> = [];
   const ftp = await ftpFixture({ after: cleanup => cleanups.push(cleanup) });
+  const sshFixture = await sftpFixture({ after: cleanup => cleanups.push(cleanup) });
   ftp.directories.add('/public');
   let websiteId = '';
   let ftpId = '';
@@ -159,7 +160,7 @@ void app.whenReady().then(async () => {
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(res => res.json());
       const client = await call('/clients', { name: 'Desktop fixture', description: '', colour: '#9876ff' });
       const ssh = await call('/clients/' + client.id + '/connections', {
-        name: 'Fixture SSH', type: 'SSH', host: '127.0.0.1', port: 22, username: 'operator',
+        ...${JSON.stringify(sshFixture.connection)}, name: 'Fixture SSH', type: 'SSH',
         fingerprint: 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
       });
       const socketOpened = await new Promise(resolve => {
@@ -174,6 +175,25 @@ void app.whenReady().then(async () => {
     assert.equal(result.socketOpened, true);
     websiteId = result.website;
     await workspace.executeJavaScript(`localStorage.setItem('opsdeck:location', JSON.stringify({ clientId: ${JSON.stringify(result.id)} })); location.reload()`);
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('[aria-label="Edit Fixture SSH"]'))`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Edit Fixture SSH"]').click()`);
+    await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('dialog[open] input[name="fingerprint"]'))`));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('dialog[open] button')).find(button => button.textContent === 'Check server key').click()`);
+    try {
+      await until(() => workspace.executeJavaScript(`document.querySelector('dialog[open]')?.textContent.includes(${JSON.stringify(sshFixture.connection.fingerprint)}) &&
+        document.querySelector('dialog[open]')?.textContent.includes('This key is not verified')`));
+    } catch (error) {
+      throw new Error(`Host key lookup did not complete: ${await workspace.executeJavaScript(`document.querySelector('dialog[open]')?.textContent`)}`, { cause: error });
+    }
+    assert.deepEqual(sshFixture.authAttempts, []);
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('dialog[open] input[name="fingerprint"]').value`),
+      'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA');
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('dialog[open] button')).find(button => button.textContent.includes('I verified it')).click()`);
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('dialog[open] input[name="fingerprint"]').value`), sshFixture.connection.fingerprint);
+    await workspace.executeJavaScript(`document.querySelector('dialog[open] input[name="host"]').focus()`);
+    await workspace.insertText('x');
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('dialog[open] input[name="fingerprint"]').value`), '');
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Close dialog"]').click()`);
     const content = window.contentView;
     await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(b => b.title === 'Fixture website')?.click() ?? Boolean(document.querySelector('.desktop-browser-slot'))`));
     const pane = await until(() => content.children.find(view => 'webContents' in view && view.webContents !== workspace));

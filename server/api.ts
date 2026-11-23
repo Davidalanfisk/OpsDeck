@@ -4,6 +4,7 @@ import { Router } from 'express';
 import { clientInput, connectionInput, layoutInput, noteInput, workspaceInput } from '../shared/model.ts';
 import { now } from './db.ts';
 import { agentIdentities } from './ssh-agent.ts';
+import { inspectSshHostKey } from './ssh-host-key.ts';
 import { z } from 'zod';
 
 function workspace(row: Record<string, SQLOutputValue>) {
@@ -14,6 +15,20 @@ function workspace(row: Record<string, SQLOutputValue>) {
 export function api(db: DatabaseSync) {
   const router = Router();
   router.get('/health', (_req, res) => { res.json({ ok: true }); });
+  router.post('/ssh/host-key', async (req, res) => {
+    const { host, port } = z.object({
+      host: z.string().trim().min(1).max(253),
+      port: z.number().int().min(1).max(65535),
+    }).parse(req.body);
+    const abort = new AbortController();
+    res.on('close', () => { if (!res.writableFinished) abort.abort(); });
+    try {
+      const fingerprint = await inspectSshHostKey(host, port, abort.signal);
+      res.json({ fingerprint });
+    } catch (error) {
+      if (!abort.signal.aborted) res.status(502).json({ error: error instanceof Error ? error.message : 'SSH host key lookup failed.' });
+    }
+  });
   router.get('/ssh-agent/identities', async (_req, res) => {
     try {
       const identities = await agentIdentities();

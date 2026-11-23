@@ -168,6 +168,7 @@ dialog::backdrop { background: #090b12c4; }
 .editor input, .editor textarea, .editor select { width: 100%; background: #111623; }
 .editor textarea { resize: vertical; }
 .editor input[type=color] { width: 64px; height: 34px; }
+.host-key-candidate { min-width: 0; overflow-wrap: anywhere; }
 .field-row { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 8px; }
 @media (max-width: 620px) {
   .app-header .header-label:first-of-type, .sync-state { display: none; }

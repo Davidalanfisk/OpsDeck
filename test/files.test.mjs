@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { once } from 'node:events';
+import { createServer } from 'node:net';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync, spawn } from 'node:child_process';
@@ -47,6 +48,35 @@ async function apiFixture(t, fileCredentialStorage) {
   const client = (await call('/clients', 'POST', { name: 'File fixture', description: '', colour: '#9876ff' })).data;
   return { call, db, dir, origin, client };
 }
+
+test('SSH host key lookup displays the presented key without authenticating', { timeout: 10_000 }, async t => {
+  const api = await apiFixture(t);
+  const remote = await sftpFixture(t);
+  const { host, port, fingerprint } = remote.connection;
+  const result = await api.call('/ssh/host-key', 'POST', { host, port });
+  assert.equal(result.status, 200);
+  assert.deepEqual(result.data, { fingerprint });
+  assert.deepEqual(remote.authAttempts, []);
+  const connection = (await api.call(`/clients/${api.client.id}/connections`, 'POST', {
+    ...remote.connection, type: 'SSH', fingerprint: result.data.fingerprint,
+  })).data;
+  const ws = new WebSocket(`${api.origin.replace('http:', 'ws:')}/ssh/${api.client.id}/${connection.id}`, { origin: api.origin });
+  try {
+    const reply = once(ws, 'message', { signal: AbortSignal.timeout(8000) });
+    await once(ws, 'open');
+    ws.send(JSON.stringify({ type: 'connect', cols: 80, rows: 24, password: 'fixture-password' }));
+    assert.equal(JSON.parse((await reply)[0].toString()).state, 'connected');
+  } finally { ws.terminate(); }
+  assert.equal((await api.call('/ssh/host-key', 'POST', { host, port: 0 })).status, 400);
+  const probe = createServer();
+  probe.listen(0, '127.0.0.1');
+  await once(probe, 'listening');
+  const unusedPort = probe.address().port;
+  await new Promise(resolve => probe.close(resolve));
+  const unavailable = await api.call('/ssh/host-key', 'POST', { host: '127.0.0.1', port: unusedPort });
+  assert.equal(unavailable.status, 502);
+  assert.match(unavailable.data.error, /host key|host, port/i);
+});
 
 for (const protocol of ['FTP', 'FTPS', 'FTPS implicit', 'SFTP']) {
   test(`${protocol} lists, edits UTF-8 safely, detects conflicts and transfers files`, { timeout: 30_000 }, async t => {

@@ -84,6 +84,8 @@ Recent tabs resume while OpsDeck is running. Cookies, website storage and cache 
 
 Add an SSH connection with the host, port, username and a **trusted SHA256 server host-key fingerprint**, obtained independently from the server administrator or console. Choose password or SSH agent authentication. Your computer must be able to reach the remote host. Restarting OpsDeck restores the terminal pane, not the live shell or scrollback; reconnect, or use a remote multiplexer for a persistent shell.
 
+If your hosting provider only gives you an address, port and login (as in GoDaddy's SSH setup), enter those details and choose **Check server key**. Compare the displayed fingerprint with the SHA256 host key fingerprint supplied by the provider through a separate trusted channel, then select **I verified it**. The lookup does not send your password, and the presented key is not proof of the server's identity by itself. If you cannot verify it, ask your provider; do not approve an unknown or changed key. Enter the SSH password when connecting.
+
 For agent authentication, load your existing key in the terminal that starts OpsDeck:
 
 ```sh

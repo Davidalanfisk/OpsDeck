@@ -65,6 +65,40 @@ export function ConnectionEditor({ value, save, close, remove }: EditorProps & {
   const [identity, setIdentity] = useState(ssh?.auth_method === 'agent' ? ssh.agent_fingerprint : '');
   const [identities, setIdentities] = useState<{ fingerprint: string; type: string }[]>([]);
   const [agentError, setAgentError] = useState('');
+  const [fingerprint, setFingerprint] = useState(ssh?.fingerprint ?? '');
+  const [candidate, setCandidate] = useState<{ host: string; port: number; fingerprint: string }>();
+  const [lookupError, setLookupError] = useState('');
+  const [lookingUp, setLookingUp] = useState(false);
+  const lookupVersion = useRef(0);
+  const hostInput = useRef<HTMLInputElement>(null);
+  const portInput = useRef<HTMLInputElement>(null);
+  function invalidateKey() {
+    lookupVersion.current++;
+    setCandidate(undefined);
+    setLookupError('');
+    setLookingUp(false);
+    setFingerprint('');
+  }
+  async function lookupHostKey() {
+    const host = hostInput.current?.value.trim() ?? '';
+    const port = Number(portInput.current?.value);
+    if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+      setLookupError('Enter a host and valid port first.');
+      return;
+    }
+    const version = ++lookupVersion.current;
+    setCandidate(undefined);
+    setLookupError('');
+    setLookingUp(true);
+    try {
+      const result = await request<{ fingerprint: string }>('/ssh/host-key', 'POST', { host, port });
+      if (version === lookupVersion.current) setCandidate({ host, port, fingerprint: result.fingerprint });
+    } catch (error) {
+      if (version === lookupVersion.current) setLookupError(describe(error));
+    } finally {
+      if (version === lookupVersion.current) setLookingUp(false);
+    }
+  }
   async function loadIdentities() {
     try {
       const keys = await request<{ fingerprint: string; type: string }[]>('/ssh-agent/identities');
@@ -83,18 +117,25 @@ export function ConnectionEditor({ value, save, close, remove }: EditorProps & {
       <label>Name <input name="name" required maxLength={120} defaultValue={value?.name} autoFocus /></label>
       <label>Type <select name="type" value={type} onChange={event => {
         const next = connectionTypes.find(option => option === event.target.value);
-        if (next) setType(next);
+        if (next) { invalidateKey(); setType(next); }
       }}>{connectionTypes.map(option => <option key={option}>{option}</option>)}</select></label>
       {network ? <>
         <div className="field-row">
-          <label>Host <input name="host" required maxLength={253} defaultValue={file?.host} /></label>
-          <label>Port <input key={usesSsh ? 'ssh' : 'ftp'} name="port" type="number" required min={1} max={65535} defaultValue={file?.port ?? (usesSsh ? 22 : 21)} /></label>
+          <label>Host <input ref={hostInput} name="host" required maxLength={253} defaultValue={file?.host} onChange={invalidateKey} /></label>
+          <label>Port <input ref={portInput} key={usesSsh ? 'ssh' : 'ftp'} name="port" type="number" required min={1} max={65535} defaultValue={file?.port ?? (usesSsh ? 22 : 21)} onChange={invalidateKey} /></label>
         </div>
         <label>Username <input name="username" required maxLength={120} defaultValue={file?.username} /></label>
         {usesSsh ? <>
-        <label>Trusted host key fingerprint <input name="fingerprint" required placeholder="SHA256:…" defaultValue={ssh?.fingerprint} />
-          <small>Get the server host key fingerprint from your server administrator or console.</small>
+        <label>Trusted host key fingerprint <input name="fingerprint" required placeholder="SHA256:…" value={fingerprint} onChange={event => setFingerprint(event.target.value)} />
+          <small>Verify the fingerprint with your hosting provider through a separate trusted channel before saving it.</small>
         </label>
+        <button type="button" disabled={lookingUp} onClick={() => void lookupHostKey()}>{lookingUp ? 'Checking server key…' : 'Check server key'}</button>
+        {lookupError && <p role="alert" className="error">{lookupError}</p>}
+        {candidate && <div className="host-key-candidate">
+          <p>Server key presented by {candidate.host}:{candidate.port}: <strong>{candidate.fingerprint}</strong></p>
+          <p className="error">This key is not verified. An attacker could present a different key. Compare it with the SHA256 host key fingerprint from your provider before trusting it.</p>
+          <button type="button" onClick={() => { setFingerprint(candidate.fingerprint); setCandidate(undefined); }}>I verified it — use this fingerprint</button>
+        </div>}
         <label>Authentication <select name="auth_method" value={authMethod} onChange={event => setAuthMethod(event.target.value === 'agent' ? 'agent' : 'password')}>
           <option value="password">Password</option><option value="agent">SSH agent</option>
         </select></label>
