@@ -19,3 +19,15 @@ export type AgentTool = {
   type: 'function';
   function: { name: string; description: string; parameters: { type: 'object'; properties: Record<string, { type: string; description: string }>; required: string[] } };
 };
+export type AgentChatResult = {
+  message: AgentMessage;
+  diagnostics: {
+    configuredContext: number;
+    loadedContext?: number;
+    promptBytes: number;
+    responseBytes: number;
+    estimatedTokens: number;
+    promptTokens?: number;
+    responseTokens?: number;
+  };
+};

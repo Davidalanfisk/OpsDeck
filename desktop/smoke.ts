@@ -34,7 +34,13 @@ void app.whenReady().then(async () => {
   let ftpId = '';
   let noteId = '';
   const toolResults: string[] = [];
+  let latestPrompt: Array<{ role: string; content: string }> = [];
   const modelServer = createServer(async (request, response) => {
+    if (request.url === '/api/ps') {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ models: [{ name: 'qwen3:8b', context_length: 16384 }] }));
+      return;
+    }
     let input = '';
     for await (const chunk of request) input += chunk;
     const body = JSON.parse(input) as { messages: Array<{ role: string; content: string; tool_name?: string }>;
@@ -43,6 +49,12 @@ void app.whenReady().then(async () => {
     assert.equal(body.truncate, false);
     assert.equal(body.shift, false);
     assert.equal(body.options.num_ctx, 16_384);
+    if (body.tools.length === 0) {
+      response.setHeader('Content-Type', 'application/json');
+      response.end(JSON.stringify({ message: { role: 'assistant', content: 'Fixture summary of prior turns.' } }));
+      return;
+    }
+    latestPrompt = body.messages;
     const createNote = body.tools.find(tool => tool.function.name === 'create_note');
     assert.ok(createNote);
     assert.deepEqual(Object.keys(createNote.function.parameters.properties).sort(), ['content', 'title']);
@@ -81,7 +93,7 @@ void app.whenReady().then(async () => {
         ] } }));
         return;
       }
-      response.end(JSON.stringify({ message: { role: 'assistant', content: 'Fixture response complete.' } }));
+      response.end(JSON.stringify({ message: { role: 'assistant', content: 'Fixture response complete.' }, prompt_eval_count: 123, eval_count: 12 }));
     } else {
       if (last?.content === 'List\nworkspace') await delay(350);
       const name = last?.content === 'Inspect website' ? 'inspect_website'
@@ -384,6 +396,11 @@ void app.whenReady().then(async () => {
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-setup')?.textContent.includes('may approach or exceed 24 GB')`));
     await workspace.executeJavaScript(`(() => { const select = document.querySelector('.agent-setup select'); select.value = 'qwen3:8b'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-setup')?.textContent.includes('Load the selected model before sending')`));
+    await until(() => workspace.executeJavaScript(`!document.querySelector('[aria-label="Client project memory"]').disabled`));
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Client project memory"]').focus()`);
+    await workspace.insertText('Fixture project fact');
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'Save client memory').click()`);
+    await until(() => workspace.executeJavaScript(`fetch('/api/clients/${result.id}/agent-memory').then(response => response.json()).then(data => data.content === 'Fixture project fact')`));
     assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-input button').disabled`), true);
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'I understand, start chatting').click()`);
     assert.equal(await workspace.executeJavaScript(`!document.querySelector('.agent-warning') && !document.querySelector('.agent-setup')`), true);
@@ -414,10 +431,18 @@ void app.whenReady().then(async () => {
     assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-message.assistant strong').textContent`), 'AI');
     assert.match(toolResults.at(-1) ?? '', /Fixture website/);
     await askAgent('Create note');
+    assert.match(latestPrompt[0].content, /Fixture project fact/);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent.includes('123 prompt tokens')`));
+    assert.match(await workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent`), /loaded context: 16,384/);
     const created = JSON.parse(toolResults.at(-2) ?? '{}') as { id: string; title: string };
     noteId = created.id;
     assert.match(created.id, /^[\da-f-]{36}$/);
     assert.match(toolResults.at(-1) ?? '', /Created by fixture/);
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'Compact conversation').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent.includes('Conversation compacted')`));
+    await askAgent('Check compacted context');
+    assert.match(latestPrompt[0].content, /Fixture summary of prior turns/);
+    assert.ok(latestPrompt.some(message => message.content === 'Create note'));
     const notes = await workspace.executeJavaScript(`fetch('/api/clients/${result.id}').then(response => response.json()).then(deck => deck.notes)`) as Array<{ id: string; title: string; content: string }>;
     assert.ok(notes.some(note => note.id === created.id && note.title === 'Agent fixture note' && note.content === 'Created by fixture'));
     await workspace.executeJavaScript(`document.querySelector('button[title="Agent fixture note"]').click()`);
@@ -483,6 +508,10 @@ void app.whenReady().then(async () => {
     assert.ok(button);
     await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'click', ${button.index})`);
     assert.equal(await freshBrowser.executeJavaScript(`document.querySelector('button').textContent`), 'Clicked fixture');
+    await askAgent(`Long request A ${'a'.repeat(8000)}`);
+    await askAgent(`Long request B ${'b'.repeat(8000)}`);
+    await askAgent(`Long request C ${'c'.repeat(8000)}`);
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent.includes('Earlier complete turns were summarized')`), true);
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Close agent"]').click()`);
     await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-panel')`));
     assert.equal(await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'inspect').then(() => false, () => true)`), true);

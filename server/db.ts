@@ -30,6 +30,10 @@ export function openDb(directory: string) {
       id TEXT NOT NULL, conversation_json TEXT NOT NULL, version INTEGER NOT NULL,
       PRIMARY KEY (client_id, id)
     ) STRICT;
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+      content TEXT NOT NULL, version INTEGER NOT NULL
+    ) STRICT;
     CREATE TABLE IF NOT EXISTS workspaces (
       id TEXT PRIMARY KEY, client_id TEXT NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
       name TEXT NOT NULL, layout_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,

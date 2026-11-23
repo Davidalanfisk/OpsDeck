@@ -57,6 +57,23 @@ export async function fileRead(id: string, path: string) {
   if (open) return { path, ...open, editorDraft: true };
   return { ...await request<RemoteText>(`/files/${session.session}/read`, 'POST', { path }), editorDraft: false };
 }
+export async function fileSearch(id: string, path: string, query: string) {
+  if (query.length < 2 || query.length > 200 || /[\r\n]/.test(query)) throw new Error('Search text must be 2–200 characters on one line.');
+  const file = await fileRead(id, path);
+  const matches: { line: number; text: string; truncated?: boolean }[] = [];
+  let total = 0;
+  for (const [index, line] of file.content.split('\n').entries()) {
+    const position = line.toLowerCase().indexOf(query.toLowerCase());
+    if (position < 0) continue;
+    total++;
+    if (matches.length < 30) {
+      const start = Math.max(0, position - 200);
+      matches.push({ line: index + 1, text: line.slice(start, start + 500),
+        ...(start > 0 || line.length > start + 500 ? { truncated: true } : {}) });
+    }
+  }
+  return { path: file.path, revision: file.revision, editorDraft: file.editorDraft, matches, total, truncated: total > matches.length };
+}
 export async function fileWrite(id: string, path: string, content: string, revision: string, snapshot?: EditorSnapshot & { editorDraft: boolean }) {
   const session = fileSession(id);
   path = canonicalPath(path);

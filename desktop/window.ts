@@ -10,6 +10,7 @@ import { fileCredentialStorage } from './file-credentials.ts';
 import { createOllama } from './ollama.ts';
 import type { createSourceUpdater } from './source-updater.ts';
 import { z } from 'zod';
+import { contextWindow, estimateTokens } from '../shared/agent-context.ts';
 
 const secure: WebPreferences = {
   sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
@@ -149,13 +150,17 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     const controller = new AbortController();
     agentRequest = controller;
     try {
+      const payload = JSON.stringify({ model, messages: safeMessages, tools: safeTools, stream: false, think: false,
+        truncate: false, shift: false, options: { num_ctx: contextWindow } });
+      const promptBytes = Buffer.byteLength(payload);
+      const estimatedTokens = estimateTokens(safeMessages, safeTools);
+      console.info('Local agent request diagnostics', { promptBytes, estimatedTokens, configuredContext: contextWindow });
       const response = await fetch(`${endpoint}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model, messages: safeMessages, tools: safeTools, stream: false, think: false,
-          truncate: false, shift: false, options: { num_ctx: 16_384 } }),
+        body: payload,
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10 * 60_000)]),
       });
-      if (!response.ok) throw new Error(`Local model request failed (HTTP ${response.status}). The conversation may be too long; try New chat or shorter input.`);
+      if (!response.ok) throw new Error(`Local model request failed (HTTP ${response.status}). If the conversation is too long, try Compact conversation, a new chat or shorter input.`);
       if (!response.body) throw new Error('The local model returned an empty response.');
       const chunks: Buffer[] = [];
       let size = 0;
@@ -167,9 +172,24 @@ export async function startDesktop(directory: string, frontend: string, port = 4
       let body: unknown;
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
       catch { throw new Error('The local model returned invalid JSON.'); }
-      const result = z.object({ message }).parse(body).message;
-      if (result.role !== 'assistant') throw new Error('The local model returned an invalid response.');
-      return result;
+      const result = z.object({ message, prompt_eval_count: z.number().int().nonnegative().optional(),
+        eval_count: z.number().int().nonnegative().optional() }).parse(body);
+      if (result.message.role !== 'assistant') throw new Error('The local model returned an invalid response.');
+      let loadedContext: number | undefined;
+      try {
+        const status = await fetch(`${endpoint}/api/ps`, { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(2000)]) });
+        if (status.ok) {
+          const parsed = z.object({ models: z.array(z.object({ name: z.string(), context_length: z.number().int().positive().optional() })) }).safeParse(await status.json());
+          if (parsed.success) loadedContext = parsed.data.models.find(item => item.name === model)?.context_length;
+        }
+      } catch {
+        // Diagnostics are optional; the requested context remains available when the status endpoint is unsupported.
+      }
+      console.info('Local agent response diagnostics', { responseBytes: size, promptTokens: result.prompt_eval_count,
+        responseTokens: result.eval_count, loadedContext });
+      return { message: result.message, diagnostics: { configuredContext: contextWindow, loadedContext,
+        promptBytes, responseBytes: size, estimatedTokens,
+        promptTokens: result.prompt_eval_count, responseTokens: result.eval_count } };
     } finally { if (agentRequest === controller) agentRequest = undefined; }
   });
   ipcMain.on('agent:cancel', event => { if (trusted(event)) agentRequest?.abort(); });

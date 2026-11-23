@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  fileCreate, fileRead, fileWrite, registerAgentFiles, registerAgentTerminal, terminalRead, terminalSend,
+  fileCreate, fileRead, fileSearch, fileWrite, registerAgentFiles, registerAgentTerminal, terminalRead, terminalSend,
 } from '../src/agent-sessions.ts';
 
 test('agent terminal access is scoped to a registered session and single-line commands', () => {
@@ -38,6 +38,15 @@ test('agent file actions update open drafts only when their snapshot still match
   const file = await fileRead('fixture', '/test.txt');
   const open = await fileRead('fixture', '/other/../open.txt');
   assert.equal(open.content, 'unsaved edit');
+  const found = await fileSearch('fixture', '/open.txt', 'EDIT');
+  assert.equal(found.editorDraft, true);
+  assert.deepEqual(found.matches, [{ line: 1, text: 'unsaved edit' }]);
+  await assert.rejects(fileSearch('fixture', '/open.txt', 'x'), /2–200/);
+  draft = { ...draft, content: `${'a'.repeat(800)}needle${'b'.repeat(800)}` };
+  const longMatch = await fileSearch('fixture', '/open.txt', 'needle');
+  assert.match(longMatch.matches[0].text, /needle/);
+  assert.equal(longMatch.matches[0].truncated, true);
+  draft = { ...draft, content: 'unsaved edit' };
   await fileWrite('fixture', '/open.txt', 'agent edit', open.revision, open);
   assert.equal(draft.content, 'agent edit');
   await assert.rejects(() => fileWrite('fixture', '/open.txt', 'overwrite', open.revision, open), /conflict/);

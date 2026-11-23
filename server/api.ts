@@ -94,6 +94,23 @@ export function api(db: DatabaseSync) {
     id: z.string().uuid(), title: z.string(), updatedAt: z.number().finite(),
     messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'action', 'tool', 'error']), content: z.string() })),
     history: z.array(agentMessage),
+    summary: z.object({ content: z.string().max(4000), through: z.number().int().min(1) }).optional(),
+  });
+  client.get('/agent-memory', (_req, res) => {
+    const row = db.prepare('SELECT content, version FROM agent_memory WHERE client_id = ?').get(res.locals.client.id);
+    res.json(row ?? { content: '', version: 0 });
+  });
+  client.put('/agent-memory', (req, res) => {
+    const { content, expectedVersion } = z.object({
+      content: z.string().max(4000), expectedVersion: z.number().int().nonnegative(),
+    }).parse(req.body);
+    const result = expectedVersion === 0
+      ? db.prepare('INSERT OR IGNORE INTO agent_memory (client_id, content, version) VALUES (?, ?, 1)')
+        .run(res.locals.client.id, content)
+      : db.prepare('UPDATE agent_memory SET content = ?, version = version + 1 WHERE client_id = ? AND version = ?')
+        .run(content, res.locals.client.id, expectedVersion);
+    if (!result.changes) { res.status(409).json({ error: 'Client memory changed elsewhere. Your edits were not overwritten.' }); return; }
+    res.json({ version: expectedVersion + 1 });
   });
   client.get('/agent-conversations', (_req, res) => {
     const rows = db.prepare('SELECT conversation_json, version FROM agent_conversations WHERE client_id = ?')

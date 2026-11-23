@@ -31,8 +31,15 @@ test('conversation API persists large histories, isolates clients and rejects st
   }
   const client = (await call('/clients', 'POST', { name: 'One', description: '', colour: '#123456' })).data;
   const other = (await call('/clients', 'POST', { name: 'Two', description: '', colour: '#123456' })).data;
+  const memoryPath = `/clients/${client.id}/agent-memory`;
+  assert.deepEqual((await call(memoryPath)).data, { content: '', version: 0 });
+  assert.deepEqual((await call(memoryPath, 'PUT', { content: 'Pinned fact', expectedVersion: 0 })).data, { version: 1 });
+  assert.equal((await call(memoryPath, 'PUT', { content: 'stale', expectedVersion: 0 })).status, 409);
+  assert.deepEqual((await call(`/clients/${other.id}/agent-memory`)).data, { content: '', version: 0 });
+  assert.deepEqual((await call(memoryPath)).data, { content: 'Pinned fact', version: 1 });
   const item = chat();
   item.messages.push({ role: 'tool', content: 'x'.repeat(2_100_000) });
+  item.summary = { content: 'Saved separately from the transcript', through: 2 };
   const path = `/clients/${client.id}/agent-conversations/${item.id}`;
   assert.deepEqual((await call(path, 'PUT', { conversation: item, expectedVersion: 0 })).data, { version: 1 });
   assert.equal((await call(path, 'PUT', { conversation: item, expectedVersion: 0 })).status, 409);
@@ -45,8 +52,10 @@ test('conversation API persists large histories, isolates clients and rejects st
   assert.equal((await call(path, 'PUT', { conversation: { ...item, title: 'Updated' }, expectedVersion: 1 })).data.version, 2);
   assert.equal((await call(path, 'PUT', { conversation: item, expectedVersion: 1 })).status, 409);
   assert.equal((await call(`/clients/${client.id}/agent-conversations`)).data[0].conversation.title, 'Updated');
+  assert.equal((await call(`/clients/${client.id}/agent-conversations`)).data[0].conversation.summary.content, item.summary.content);
   await call(`/clients/${client.id}`, 'DELETE');
   assert.equal(db.prepare('SELECT count(*) AS total FROM agent_conversations').get().total, 0);
+  assert.equal(db.prepare('SELECT count(*) AS total FROM agent_memory').get().total, 0);
 });
 
 test('legacy chats migrate without erasing data on failure or conflicting copies', async t => {
