@@ -24,7 +24,7 @@ You can also use an external desktop agent such as ChatGPT or Claude with deskto
 
 ### Local Ollama agent
 
-In the desktop app, open a client workspace and choose **Local agent**. Pick a model and select **Set up local model**. Read the warning and select **I understand, start chatting** once the model is ready; use the settings button to change the model or website access. Enter sends a message and Shift+Enter adds a line. OpsDeck downloads a pinned official Ollama runtime, verifies its SHA-256 checksum, and downloads the selected local model. The recommendation uses system RAM as a rough guide, not a guarantee of speed; GPU availability and free memory also matter. The runtime needs about 230 MB on Apple silicon or 1.6 GB on Windows x64, plus extraction space and 2.5–9.3 GB for a model. Windows GPU support depends on the hardware and drivers; CPU inference may be slow. The runtime and models live in the per-user desktop workspace directory; no administrator installation is required, although device security policies may block execution. Downloads require internet access.
+In the desktop app, open a client workspace and choose **Local agent**. Pick a model and select **Set up local model**. Read the warning and select **I understand, start chatting** once the model is ready; use the settings button to change the model or website access. Enter sends a message and Shift+Enter adds a line. OpsDeck downloads a pinned official Ollama runtime, verifies its SHA-256 checksum, and downloads the selected local model. The recommendation uses system RAM as a rough guide, not a guarantee of speed; GPU availability and free memory also matter. The runtime needs about 230 MB on Apple silicon or 1.6 GB on Windows x64, plus extraction space and 2.5–19 GB for a model. The optional Qwen3 30B-A3B model is about 19 GB on disk; context and other apps need additional memory, so a 24 GB Mac may swap, slow down, or fail to load it. The 14B model leaves more headroom and remains the recommendation for 24 GB. Windows GPU support depends on the hardware and drivers; CPU inference may be slow. The runtime and models live in the per-user desktop workspace directory; no administrator installation is required, although device security policies may block execution. Downloads require internet access.
 
 The agent starts its own loopback-only Ollama service with cloud features disabled. Prompts and tool results go to that local service; downloads come from Ollama's distribution services. Other local processes with access to the machine may be able to access the local service. Conversations and website permission last only while the agent panel is open and are not saved by OpsDeck. Restart the app and choose **Set up local model** again to start the service; an already downloaded runtime and model are reused.
 
@@ -96,10 +96,10 @@ Install Docker for your platform and start its engine:
 | macOS | Install [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/), choosing the Apple silicon or Intel download for your Mac. Start Docker Desktop and run the commands below in Terminal. |
 | Linux | Install [Docker Engine](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) for your distribution. Run the commands below as a user with access to the Docker daemon. |
 
-Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.6.0` release with Git:
+Download and extract the source archive from [GitHub Releases](https://github.com/Davidalanfisk/OpsDeck/releases), or clone the `v0.6.1` release with Git:
 
 ```sh
-git clone --branch v0.6.0 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
+git clone --branch v0.6.1 https://github.com/Davidalanfisk/OpsDeck.git OpsDeck
 cd OpsDeck
 ```
 

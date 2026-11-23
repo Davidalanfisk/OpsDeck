@@ -1,4 +1,4 @@
-export const ollamaModels = ['qwen3:4b', 'qwen3:8b', 'qwen3:14b'] as const;
+export const ollamaModels = ['qwen3:4b', 'qwen3:8b', 'qwen3:14b', 'qwen3:30b-a3b'] as const;
 export type OllamaModel = typeof ollamaModels[number];
 export type OllamaStatus = {
   phase: 'idle' | 'downloading' | 'extracting' | 'starting' | 'pulling' | 'ready' | 'error';

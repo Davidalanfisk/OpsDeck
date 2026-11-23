@@ -17,8 +17,13 @@ const server = http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
   if (request.url === '/api/version') return response.end('{"version":"fixture"}');
   if (request.url === '/api/tags') return response.end('{"models":[{"name":"qwen3:4b"}]}');
-  if (request.url === '/api/pull') { pulls++; return response.end('{"status":"success"}\\n'); }
-  if (request.url === '/env') return response.end(JSON.stringify({ cloud: process.env.OLLAMA_NO_CLOUD, models: process.env.OLLAMA_MODELS, pulls }));
+  if (request.url === '/api/pull') {
+    let body = '';
+    request.on('data', chunk => body += chunk);
+    request.on('end', () => { pulls++; server.lastModel = JSON.parse(body).model; response.end('{"status":"success"}\\n'); });
+    return;
+  }
+  if (request.url === '/env') return response.end(JSON.stringify({ cloud: process.env.OLLAMA_NO_CLOUD, models: process.env.OLLAMA_MODELS, pulls, lastModel: server.lastModel }));
   response.writeHead(404).end();
 });
 const port = Number(process.env.OLLAMA_HOST.split(':').pop());
@@ -48,6 +53,9 @@ server.listen(port, '127.0.0.1');
   await ollama.setup('qwen3:8b');
   assert.equal(ollama.status().model, 'qwen3:8b');
   assert.equal((await (await fetch(`${origin}/env`)).json()).pulls, 1);
+  await ollama.setup('qwen3:30b-a3b');
+  assert.equal(ollama.status().model, 'qwen3:30b-a3b');
+  assert.equal((await (await fetch(`${origin}/env`)).json()).lastModel, 'qwen3:30b-a3b');
   ollama.close();
   for (let attempt = 0; attempt < 30; attempt++) {
     try { await fetch(`${origin}/api/version`, { signal: AbortSignal.timeout(200) }); }

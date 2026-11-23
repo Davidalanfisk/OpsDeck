@@ -317,6 +317,10 @@ void app.whenReady().then(async () => {
     await until(() => freshPane.getVisible());
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Local agent').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-setup [role="status"]')?.textContent === 'Fixture model ready'`));
+    await workspace.executeJavaScript(`(() => { const select = document.querySelector('.agent-setup select'); select.value = 'qwen3:30b-a3b'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('.agent-setup')?.textContent.includes('may approach or exceed 24 GB')`));
+    await workspace.executeJavaScript(`(() => { const select = document.querySelector('.agent-setup select'); select.value = 'qwen3:8b'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-setup')?.textContent.includes('Load the selected model before sending')`));
     assert.equal(await workspace.executeJavaScript(`document.querySelector('.agent-input button').disabled`), true);
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'I understand, start chatting').click()`);
     assert.equal(await workspace.executeJavaScript(`!document.querySelector('.agent-warning') && !document.querySelector('.agent-setup')`), true);

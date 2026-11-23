@@ -40,6 +40,7 @@ const modelLabels: Record<OllamaModel, string> = {
   'qwen3:4b': 'Qwen3 4B — about 2.5 GB',
   'qwen3:8b': 'Qwen3 8B — about 5.2 GB',
   'qwen3:14b': 'Qwen3 14B — about 9.3 GB',
+  'qwen3:30b-a3b': 'Qwen3 30B-A3B — about 19 GB (high memory)',
 };
 type DisplayMessage = { role: 'user' | 'assistant' | 'action' | 'error'; content: string };
 
@@ -238,6 +239,7 @@ export function Agent({ deck, dock, openPanel, close }: {
           if (choice) setModel(choice);
         }}>{ollamaModels.map(item => <option key={item} value={item}>{modelLabels[item]}{status?.recommended === item ? ' (recommended)' : ''}</option>)}</select></label>
       <small>Memory-based estimate, not a guarantee of speed. Runtime download: ~230 MB on Mac, ~1.6 GB on Windows, plus model and disk space.</small>
+      {model === 'qwen3:30b-a3b' && <small>The 30B model may approach or exceed 24 GB of memory with context and other apps, causing swapping, slowdowns or failure. The 14B model leaves more headroom.</small>}
       <button disabled={!model || busy || !status || ['downloading', 'extracting', 'starting', 'pulling'].includes(status.phase)}
         onClick={() => { if (model) { setError(''); void bridge.ollamaSetup(model).catch(error => { if (alive.current) setError(describe(error)); }); } }}>
         {status?.phase === 'ready' ? 'Load selected model' : 'Set up local model'}
