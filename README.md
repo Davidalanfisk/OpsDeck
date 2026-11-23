@@ -1,18 +1,34 @@
 # OpsDeck
 
-**Your client operations, in one workspace.** OpsDeck brings websites, SSH terminals, remote files and runbooks together in dockable panes, so you can move from investigation to action without losing your place.
+**Every client. Every tool. One organized workspace.** OpsDeck brings the websites, conversations and notes you use for each client together, so you can get to work without hunting through a sea of browser tabs.
 
-Organize work by client, build layouts around the tools you use, and return to the same context later. OpsDeck is useful on its own: its terminals, editor, notes and website panes work without AI or a model download.
+Keep a support inbox next to a website dashboard, a WordPress admin panel, analytics and your client notes. Switch clients to switch context, arrange tabs and panes the way you like, and return to your saved workspace later. Whether you manage websites, projects or technical operations, OpsDeck helps keep the relevant information close at hand.
 
-When you want a hand, the optional **local AI assistant** can inspect the current workspace, work with notes and remote files, read terminal output and send commands. With your permission it can also interact with visible website panes. Review its actions: it can make real changes and can make mistakes.
+OpsDeck works without AI or a model download. When you want a hand, its optional **local AI assistant** can help organize the workspace and work with notes, files and terminals. With website access enabled for the session, it can also inspect visible pages and interact with supported controls. Review its actions: it can make real changes and can make mistakes.
 
 OpsDeck is a single-operator desktop application, not a multi-user access-control system.
 
-## See it in action
+## A clearer way to work across clients
+
+Start with a client list rather than a pile of unrelated browser tabs. Open a workspace to bring that client's connections and notes together; use named workspaces and saved layouts to organize different tasks or projects.
 
 | Client dashboard | Client workspace |
 | --- | --- |
 | ![OpsDeck client dashboard](docs/screenshots/clients.png) | ![OpsDeck docked client workspace](docs/screenshots/workspace.png) |
+
+### Your websites, side by side
+
+Keep support tickets, web front ends, WordPress admin, analytics such as Google Analytics and notes within the same client workspace. Open multiple website panes, drag tabs to arrange or split them, and keep the context you need in view. Each client's website profile is separate, so its cookies and sessions are kept apart from other clients.
+
+![A client workspace with a support inbox, analytics dashboard and notes side by side](docs/screenshots/web-workspace.png)
+
+### An assistant that can help in context
+
+Ask the local assistant to help with the workspace you're already using. For example, with website access enabled, it can read visible support-page text and interact with supported controls; it can also work with notes and other connected tools. Website access is off by default, does not cover every site or iframe, and is not visual screenshot understanding. Check its actions and outputs before relying on them.
+
+![The local assistant inspecting a support inbox alongside websites and client notes](docs/screenshots/web-assistant.png)
+
+### Tools for technical work, too
 
 | Remote file browser | Monaco editor |
 | --- | --- |
@@ -20,11 +36,12 @@ OpsDeck is a single-operator desktop application, not a multi-user access-contro
 
 ![Local assistant creating a note and showing its actions](docs/screenshots/ai-workflow.png)
 
-Screenshots use demonstration data; the assistant example uses a scripted demo model response.
+Screenshots use demonstration data. The example websites and assistant responses are scripted; browser-pane captures are assembled with the desktop workspace capture.
 
 ## What you can do
 
 - **Organize clients:** keep connections and notes together, search the library, and use named workspaces and reusable layouts.
+- **Stay on top of web work:** keep support, website administration, analytics and notes organized by client, with website panes side by side.
 - **Bring tools together:** open websites, SSH terminals, notes and remote file editors side by side; drag tabs to dock, split and reorder them.
 - **Work with remote files:** browse SFTP, FTPS and FTP, create files and directories, upload or download files, and edit text in Monaco, the editor engine used by VS Code.
 - **Keep a runbook nearby:** write Markdown notes with preview and autosave.
