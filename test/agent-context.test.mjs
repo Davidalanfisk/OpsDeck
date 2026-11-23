@@ -55,3 +55,22 @@ test('context budget includes tool payload and interrupted recovery adjusts summ
   assert.equal(recovered.summary.through, 4);
   assert.equal(contextMessages(recovered.history, recovered.summary)[1].content, 'b');
 });
+test('earlier tool traces are shortened in context while the current turn stays intact', () => {
+  const big = 'x'.repeat(5000);
+  const traced = [system, { role: 'user', content: 'old' },
+    { role: 'assistant', content: '', tool_calls: [{ function: { name: 'write_file', arguments: { content: big } } }] },
+    { role: 'tool', tool_name: 'read_file', content: big }, { role: 'user', content: 'now' },
+    { role: 'assistant', content: '', tool_calls: [{ function: { name: 'read_file', arguments: {} } }] },
+    { role: 'tool', tool_name: 'read_file', content: big },
+    { role: 'assistant', content: '', tool_calls: [{ function: { name: 'read_file', arguments: {} } }] },
+    { role: 'tool', tool_name: 'read_file', content: big }];
+  const prompt = contextMessages(traced);
+  assert.match(prompt[2].tool_calls[0].function.arguments.content, /5000 chars omitted/);
+  assert.match(prompt[3].content, /omitted_from_context/);
+  assert.equal(prompt[6].content, big);
+  assert.equal(traced[3].content, big);
+  const aggressive = contextMessages(traced, undefined, '', 1);
+  assert.match(aggressive[6].content, /omitted_from_context/);
+  assert.equal(aggressive[8].content, big);
+  assert.ok(summaryChunks(traced, 1, 4).join('').length < 3000);
+});

@@ -41,7 +41,8 @@ test('agent file actions update open drafts only when their snapshot still match
   const found = await fileSearch('fixture', '/open.txt', 'EDIT');
   assert.equal(found.editorDraft, true);
   assert.deepEqual(found.matches, [{ line: 1, text: 'unsaved edit' }]);
-  await assert.rejects(fileSearch('fixture', '/open.txt', 'x'), /2–200/);
+  assert.deepEqual((await fileSearch('fixture', '/open.txt', 'missing|UNSAVED')).matches.map(match => match.line), [1]);
+  await assert.rejects(fileSearch('fixture', '/open.txt', 'x'), /2–100/);
   draft = { ...draft, content: `${'a'.repeat(800)}needle${'b'.repeat(800)}` };
   const longMatch = await fileSearch('fixture', '/open.txt', 'needle');
   assert.match(longMatch.matches[0].text, /needle/);

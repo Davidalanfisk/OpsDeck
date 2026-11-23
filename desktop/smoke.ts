@@ -79,17 +79,21 @@ void app.whenReady().then(async () => {
         return;
       }
       if (last.tool_name === 'read_note' && instruction === 'Edit open note') {
-        const note = JSON.parse(last.content) as { content: string; updated_at: string };
+        const note = JSON.parse(last.content) as { content: string; updated_at: string; complete: boolean };
+        assert.equal(note.complete, true);
+        const lastLine = note.content.replace(/^\d+\| /gm, '').split('\n').filter(line => line.trim()).at(-1)!;
         response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
-          { function: { name: 'write_note', arguments: { id: noteId, content: `${note.content}\nAgent note edit`, revision: note.updated_at } } },
+          { function: { name: 'edit_note', arguments: { id: noteId, old_text: lastLine, new_text: `${lastLine}\nAgent note edit`, revision: note.updated_at } } },
         ] } }));
         return;
       }
       if (last.tool_name === 'read_file' && ['Edit remote file', 'Conflict remote file', 'Edit open file'].includes(instruction ?? '')) {
         const file = JSON.parse(last.content) as { content: string; revision: string };
         if (instruction === 'Conflict remote file') ftp.files.set('/agent.txt', Buffer.from('external edit'));
-        response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [
-          { function: { name: 'write_file', arguments: { id: ftpId, path: '/agent.txt', content: instruction === 'Edit open file' ? `${file.content}\nagent draft` : 'agent edit', revision: file.revision } } },
+        const lastLine = file.content.replace(/^\d+\| /gm, '').split('\n').filter(line => line.trim()).at(-1)!;
+        response.end(JSON.stringify({ message: { role: 'assistant', content: '', tool_calls: [instruction === 'Edit open file'
+          ? { function: { name: 'edit_file', arguments: { id: ftpId, path: '/agent.txt', old_text: lastLine, new_text: `${lastLine}\nagent draft`, revision: file.revision } } }
+          : { function: { name: 'write_file', arguments: { id: ftpId, path: '/agent.txt', content: 'agent edit', revision: file.revision } } },
         ] } }));
         return;
       }
