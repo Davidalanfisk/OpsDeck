@@ -35,10 +35,11 @@ void app.whenReady().then(async () => {
   let noteId = '';
   const toolResults: string[] = [];
   let latestPrompt: Array<{ role: string; content: string }> = [];
+  let expectedContext = 32_768;
   const modelServer = createServer(async (request, response) => {
     if (request.url === '/api/ps') {
       response.setHeader('Content-Type', 'application/json');
-      response.end(JSON.stringify({ models: [{ name: 'qwen3:8b', context_length: 16384 }] }));
+      response.end(JSON.stringify({ models: [{ name: 'qwen3:8b', context_length: expectedContext }] }));
       return;
     }
     let input = '';
@@ -48,7 +49,7 @@ void app.whenReady().then(async () => {
       truncate: boolean; shift: boolean; options: { num_ctx: number } };
     assert.equal(body.truncate, false);
     assert.equal(body.shift, false);
-    assert.equal(body.options.num_ctx, 16_384);
+    assert.equal(body.options.num_ctx, expectedContext);
     if (body.tools.length === 0) {
       response.setHeader('Content-Type', 'application/json');
       response.end(JSON.stringify({ message: { role: 'assistant', content: 'Fixture summary of prior turns.' } }));
@@ -121,7 +122,7 @@ void app.whenReady().then(async () => {
   const modelOrigin = `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}`;
   const fakeOllama = {
     status: () => ({ phase: 'ready' as const, detail: 'Fixture model ready', memoryBytes: 16 * 1024 ** 3,
-      recommended: 'qwen3:8b' as const, model: 'qwen3:8b' as const }),
+      recommended: 'qwen3:8b' as const, model: 'qwen3:8b' as const, contextLimit: 65536 }),
     setup: async (_model: unknown) => {},
     origin: () => ({ origin: modelOrigin, model: 'qwen3:8b' as const }),
     close: () => {},
@@ -171,6 +172,15 @@ void app.whenReady().then(async () => {
     });
     assert.equal((await fetch(`${desktop.origin}/api/clients`)).status, 403);
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('main'))`));
+    const requestContext = (size: number) => workspace.executeJavaScript(
+      `window.opsDeckDesktop.agentChat([{role:'system',content:'fixture'}], [], ${size})`,
+    );
+    assert.equal((await requestContext(32768)).diagnostics.configuredContext, 32768);
+    expectedContext = 65_536;
+    assert.equal((await requestContext(65536)).diagnostics.configuredContext, 65536);
+    assert.equal(await requestContext(131072).then(() => false, () => true), true);
+    expectedContext = 32_768;
+    console.log('Desktop: agent context request and model-limit IPC checks passed');
     const result = await workspace.executeJavaScript(`(async () => {
       const call = (path, body) => fetch('/api' + path, { method: 'POST',
         headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(res => res.json());
@@ -212,6 +222,20 @@ void app.whenReady().then(async () => {
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Close dialog"]').click()`);
     const content = window.contentView;
     await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(b => b.title === 'Fixture website')?.click() ?? Boolean(document.querySelector('.desktop-browser-slot'))`));
+    await until(() => workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).some(button => button.textContent === 'Local agent' && !button.disabled)`));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Local agent').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"]') && !document.querySelector('[aria-label="Context window"]').disabled`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"]').value`), '32768');
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"] option[value="131072"]').disabled`), true);
+    await workspace.executeJavaScript(`(() => { const select = document.querySelector('[aria-label="Context window"]'); select.value = '65536'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Close agent"]').click()`);
+    await until(() => workspace.executeJavaScript(`!document.querySelector('[aria-label="Context window"]')`));
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('button')).find(button => button.textContent === 'Local agent').click()`);
+    await until(() => workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"]') && !document.querySelector('[aria-label="Context window"]').disabled`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"]').value`), '65536');
+    await workspace.executeJavaScript(`(() => { const select = document.querySelector('[aria-label="Context window"]'); select.value = '32768'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Close agent"]').click()`);
+    console.log('Desktop: context selector default, capability and persistence checks passed');
     const pane = await until(() => content.children.find(view => 'webContents' in view && view.webContents !== workspace));
     assert.ok('webContents' in pane);
     const browser = pane.webContents as Electron.WebContents;
@@ -400,6 +424,11 @@ void app.whenReady().then(async () => {
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-setup')?.textContent.includes('may approach or exceed 24 GB')`));
     await workspace.executeJavaScript(`(() => { const select = document.querySelector('.agent-setup select'); select.value = 'qwen3:8b'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
     await until(() => workspace.executeJavaScript(`!document.querySelector('.agent-setup')?.textContent.includes('Load the selected model before sending')`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"]').value`), '32768');
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"] option[value="131072"]').disabled`), true);
+    assert.equal(await workspace.executeJavaScript(`window.opsDeckDesktop.agentChat([{role:'system',content:'test'}], [], 131072).then(() => false, () => true)`), true);
+    await workspace.executeJavaScript(`(() => { const select = document.querySelector('[aria-label="Context window"]'); select.value = '65536'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    expectedContext = 65_536;
     await until(() => workspace.executeJavaScript(`!document.querySelector('[aria-label="Client project memory"]').disabled`));
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Client project memory"]').focus()`);
     await workspace.insertText('Fixture project fact');
@@ -437,7 +466,7 @@ void app.whenReady().then(async () => {
     await askAgent('Create note');
     assert.match(latestPrompt[0].content, /Fixture project fact/);
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent.includes('123 prompt tokens')`));
-    assert.match(await workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent`), /loaded context: 16,384/);
+    assert.match(await workspace.executeJavaScript(`document.querySelector('.agent-panel').textContent`), /loaded context: 65,536/);
     const created = JSON.parse(toolResults.at(-2) ?? '{}') as { id: string; title: string };
     noteId = created.id;
     assert.match(created.id, /^[\da-f-]{36}$/);
@@ -490,6 +519,7 @@ void app.whenReady().then(async () => {
     await until(() => freshPane.getVisible());
     await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent settings"]').click()`);
     await until(() => workspace.executeJavaScript(`Boolean(document.querySelector('.agent-consent input'))`));
+    assert.equal(await workspace.executeJavaScript(`document.querySelector('[aria-label="Context window"]').value`), '65536');
     await workspace.executeJavaScript(`document.querySelector('.agent-consent input').click()`);
     await until(() => workspace.executeJavaScript(`document.querySelector('.agent-consent input').checked`));
     await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'Done').click()`);
@@ -512,6 +542,10 @@ void app.whenReady().then(async () => {
     assert.ok(button);
     await workspace.executeJavaScript(`window.opsDeckDesktop.agentWebsite(${JSON.stringify(result.website)}, 'click', ${button.index})`);
     assert.equal(await freshBrowser.executeJavaScript(`document.querySelector('button').textContent`), 'Clicked fixture');
+    await workspace.executeJavaScript(`document.querySelector('[aria-label="Agent settings"]').click()`);
+    await workspace.executeJavaScript(`(() => { const select = document.querySelector('[aria-label="Context window"]'); select.value = '16384'; select.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await workspace.executeJavaScript(`Array.from(document.querySelectorAll('.agent-panel button')).find(button => button.textContent === 'Done').click()`);
+    expectedContext = 16_384;
     await askAgent(`Long request A ${'a'.repeat(8000)}`);
     await askAgent(`Long request B ${'b'.repeat(8000)}`);
     await askAgent(`Long request C ${'c'.repeat(8000)}`);

@@ -10,6 +10,29 @@ import { pipeline } from 'node:stream/promises';
 import { setTimeout as delay } from 'node:timers/promises';
 import { ollamaModels } from '../shared/ollama.ts';
 import type { OllamaModel, OllamaStatus } from '../shared/ollama.ts';
+import { contextSizes } from '../shared/agent-context.ts';
+
+export function modelContextLimit(info: unknown): number {
+  if (!info || typeof info !== 'object' || !('model_info' in info) ||
+      !info.model_info || typeof info.model_info !== 'object') {
+    throw new Error('Ollama did not report the model context limit. Reload the model and try again.');
+  }
+  const limits = Object.entries(info.model_info).filter(([key]) => key.endsWith('.context_length'))
+    .map(([, value]) => value).filter((value): value is number => typeof value === 'number' && Number.isSafeInteger(value) && value > 0);
+  if (!limits.length || Math.min(...limits) < contextSizes[0]) {
+    throw new Error('Ollama did not report a supported model context limit (at least 8K required).');
+  }
+  return Math.min(...limits);
+}
+
+export async function fetchModelContextLimit(origin: string, model: OllamaModel, signal: AbortSignal) {
+  const response = await fetch(`${origin}/api/show`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model }), signal,
+  });
+  if (!response.ok) throw new Error(`Could not check model context support (HTTP ${response.status}).`);
+  return modelContextLimit(await response.json());
+}
 
 const release = 'v0.40.17';
 const assets = {
@@ -155,10 +178,7 @@ export function createOllama(directory: string) {
     if (!listing || typeof listing !== 'object' || !('models' in listing) || !Array.isArray(listing.models)) {
       throw new Error('Ollama returned an invalid model list.');
     }
-    if (listing.models.some(item => item && typeof item === 'object' && 'name' in item && item.name === model)) {
-      set('ready', `Ready: ${model}`, { model });
-      return;
-    }
+    if (listing.models.some(item => item && typeof item === 'object' && 'name' in item && item.name === model)) return;
     set('pulling', `Downloading ${model}…`, { model });
     const response = await fetch(`${origin}/api/pull`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -184,7 +204,6 @@ export function createOllama(directory: string) {
       }
     }
     if (!success) throw new Error('The model download ended before completion.');
-    set('ready', `Ready: ${model}`, { model });
   }
   async function setup(model: unknown) {
     const selected = ollamaModels.find(option => option === model);
@@ -197,6 +216,9 @@ export function createOllama(directory: string) {
       await start(binary);
       if (shuttingDown) throw new Error('OpsDeck is closing.');
       await pull(selected);
+      set('starting', `Checking context support for ${selected}…`, { model: selected });
+      const contextLimit = await fetchModelContextLimit(origin, selected, AbortSignal.any([shutdown.signal, AbortSignal.timeout(10_000)]));
+      set('ready', `Ready: ${selected}`, { model: selected, contextLimit });
     } catch (error) {
       set('error', error instanceof Error ? error.message : 'Ollama setup failed.');
       throw error;

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { compactionBoundary, contextMessages, estimateTokens, makeSummary, needsCompaction, summaryChunks } from '../shared/agent-context.ts';
+import { activeContextBudget, compactionBoundary, contextMessages, estimateTokens, isContextSize, makeSummary, needsCompaction, summaryChunks, supportedContextSize } from '../shared/agent-context.ts';
 import { recoverConversation } from '../src/agent-history.ts';
 
 const system = { role: 'system', content: 'instructions' };
@@ -47,13 +47,23 @@ test('summary failures preserve prior state and long multilingual chunks are bou
 
 test('context budget includes tool payload and interrupted recovery adjusts summary boundary', () => {
   assert.ok(estimateTokens([system], []) < estimateTokens([system, { role: 'user', content: 'é'.repeat(100) }], []));
-  assert.equal(needsCompaction([system, { role: 'user', content: 'x'.repeat(30000) }], []), true);
+  assert.equal(needsCompaction([system, { role: 'user', content: 'x'.repeat(60000) }], []), true);
   const interrupted = { id: 'a', title: 'a', updatedAt: 0, messages: [],
     history: [system, { role: 'user', content: 'a' }, history[2], { role: 'user', content: 'b' }],
     summary: { content: 'summary', through: 3 } };
   const recovered = recoverConversation(interrupted, system);
   assert.equal(recovered.summary.through, 4);
   assert.equal(contextMessages(recovered.history, recovered.summary)[1].content, 'b');
+});
+test('context sizes respect model capability and reserve output space', () => {
+  assert.equal(isContextSize(32768), true);
+  assert.equal(isContextSize(40000), false);
+  assert.equal(supportedContextSize(131072, 40960), 32768);
+  assert.equal(supportedContextSize(32768, 8192), 8192);
+  assert.equal(supportedContextSize(32768, 4096), undefined);
+  assert.equal(activeContextBudget(32768, 75), 24576);
+  assert.equal(activeContextBudget(65536, 75, 32768), 28672);
+  assert.equal(activeContextBudget(8192, 75), 4096);
 });
 test('earlier tool traces are shortened in context while the current turn stays intact', () => {
   const big = 'x'.repeat(5000);

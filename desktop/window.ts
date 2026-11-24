@@ -10,7 +10,7 @@ import { fileCredentialStorage } from './file-credentials.ts';
 import { createOllama } from './ollama.ts';
 import type { createSourceUpdater } from './source-updater.ts';
 import { z } from 'zod';
-import { contextWindow, estimateTokens } from '../shared/agent-context.ts';
+import { estimateTokens, isContextSize } from '../shared/agent-context.ts';
 
 const secure: WebPreferences = {
   sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
@@ -129,7 +129,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
   });
   ipcMain.handle('agent:status', event => { requireTrusted(event); return ollama.status(); });
   ipcMain.handle('agent:setup', async (event, model: unknown) => { requireTrusted(event); await ollama.setup(model); });
-  ipcMain.handle('agent:chat', async (event, messages: unknown, tools: unknown) => {
+  ipcMain.handle('agent:chat', async (event, messages: unknown, tools: unknown, contextSize: unknown) => {
     requireTrusted(event);
     if (agentRequest) throw new Error('An agent request is already running.');
     const message = z.object({
@@ -147,14 +147,18 @@ export async function startDesktop(directory: string, frontend: string, port = 4
     })).max(20).parse(tools);
     if (JSON.stringify({ safeMessages, safeTools }).length > 500_000) throw new Error('The agent conversation is too large. Start a new session.');
     const { origin: endpoint, model } = ollama.origin();
+    const contextLimit = ollama.status().contextLimit;
+    if (!isContextSize(contextSize) || !contextLimit || contextSize > contextLimit) {
+      throw new Error('Selected context size is not supported by the loaded model. Reload the model or choose a smaller size.');
+    }
     const controller = new AbortController();
     agentRequest = controller;
     try {
       const payload = JSON.stringify({ model, messages: safeMessages, tools: safeTools, stream: false, think: false,
-        truncate: false, shift: false, options: { num_ctx: contextWindow } });
+        truncate: false, shift: false, options: { num_ctx: contextSize } });
       const promptBytes = Buffer.byteLength(payload);
       const estimatedTokens = estimateTokens(safeMessages, safeTools);
-      console.info('Local agent request diagnostics', { promptBytes, estimatedTokens, configuredContext: contextWindow });
+      console.info('Local agent request diagnostics', { promptBytes, estimatedTokens, configuredContext: contextSize });
       const response = await fetch(`${endpoint}/api/chat`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: payload,
@@ -187,7 +191,7 @@ export async function startDesktop(directory: string, frontend: string, port = 4
       }
       console.info('Local agent response diagnostics', { responseBytes: size, promptTokens: result.prompt_eval_count,
         responseTokens: result.eval_count, loadedContext });
-      return { message: result.message, diagnostics: { configuredContext: contextWindow, loadedContext,
+      return { message: result.message, diagnostics: { configuredContext: contextSize, loadedContext,
         promptBytes, responseBytes: size, estimatedTokens,
         promptTokens: result.prompt_eval_count, responseTokens: result.eval_count } };
     } finally { if (agentRequest === controller) agentRequest = undefined; }

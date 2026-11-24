@@ -19,7 +19,7 @@ const bridge: DesktopBridge = {
   },
   ollamaStatus: () => ipcRenderer.invoke('agent:status'),
   ollamaSetup: model => ipcRenderer.invoke('agent:setup', model),
-  agentChat: (messages, tools) => ipcRenderer.invoke('agent:chat', messages, tools),
+  agentChat: (messages, tools, contextSize) => ipcRenderer.invoke('agent:chat', messages, tools, contextSize),
   agentCancel: () => ipcRenderer.send('agent:cancel'),
   agentWebsiteAccess: clientId => ipcRenderer.invoke('agent:website-access', clientId),
   agentWebsite: (id, action, index, value) => ipcRenderer.invoke('agent:website', id, action, index, value),

@@ -4,7 +4,28 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createOllama } from '../desktop/ollama.ts';
+import { createOllama, fetchModelContextLimit, modelContextLimit } from '../desktop/ollama.ts';
+
+test('model context limit requires valid metadata and handles model architectures', () => {
+  assert.equal(modelContextLimit({ model_info: { 'qwen3moe.context_length': 40960 } }), 40960);
+  assert.equal(modelContextLimit({ model_info: { 'qwen3.context_length': 131072, 'other.context_length': 65536 } }), 65536);
+  assert.throws(() => modelContextLimit({ model_info: {} }), /context limit/);
+  assert.throws(() => modelContextLimit({ model_info: { 'qwen3.context_length': 4096 } }), /context limit/);
+});
+
+test('model context metadata request uses the selected model and reports failures', async t => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  globalThis.fetch = async (url, options) => {
+    assert.equal(url, 'http://127.0.0.1:1234/api/show');
+    assert.equal(options.method, 'POST');
+    assert.deepEqual(JSON.parse(options.body), { model: 'qwen3:30b-a3b' });
+    return Response.json({ model_info: { 'qwen3moe.context_length': 40960 } });
+  };
+  assert.equal(await fetchModelContextLimit('http://127.0.0.1:1234', 'qwen3:30b-a3b', AbortSignal.timeout(1000)), 40960);
+  globalThis.fetch = async () => new Response(null, { status: 503 });
+  await assert.rejects(fetchModelContextLimit('http://127.0.0.1:1234', 'qwen3:30b-a3b', AbortSignal.timeout(1000)), /HTTP 503/);
+});
 
 test('setup starts a loopback-only runtime and reuses an installed model', { timeout: 15_000, skip: process.platform === 'win32' }, async t => {
   const dir = mkdtempSync(join(tmpdir(), 'opsdeck-ollama-'));
@@ -17,6 +38,7 @@ const server = http.createServer((request, response) => {
   response.setHeader('content-type', 'application/json');
   if (request.url === '/api/version') return response.end('{"version":"fixture"}');
   if (request.url === '/api/tags') return response.end('{"models":[{"name":"qwen3:4b"}]}');
+  if (request.url === '/api/show') return response.end('{"model_info":{"qwen3.context_length":40960}}');
   if (request.url === '/api/pull') {
     let body = '';
     request.on('data', chunk => body += chunk);
@@ -44,6 +66,7 @@ server.listen(port, '127.0.0.1');
   await assert.rejects(() => ollama.setup('not-a-model'), /supported local model/);
   await ollama.setup('qwen3:4b');
   assert.equal(ollama.status().phase, 'ready');
+  assert.equal(ollama.status().contextLimit, 40960);
   const { origin, model } = ollama.origin();
   assert.equal(model, 'qwen3:4b');
   const env = await (await fetch(`${origin}/env`)).json();

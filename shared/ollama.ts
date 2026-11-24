@@ -7,6 +7,7 @@ export type OllamaStatus = {
   memoryBytes: number;
   recommended: OllamaModel;
   model?: OllamaModel;
+  contextLimit?: number;
 };
 export type AgentToolCall = { function: { name: string; arguments: Record<string, unknown> } };
 export type AgentMessage = {

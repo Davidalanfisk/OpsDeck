@@ -1,8 +1,21 @@
 import type { AgentMessage, AgentTool } from './ollama.ts';
 
-export const contextWindow = 16_384;
-export const contextBudget = 12_288;
+export const contextSizes = [8192, 16384, 32768, 65536, 131072] as const;
+export const contextWindow = 32_768;
+export const contextBudget = contextWindow * 0.75;
 export const maxContextMessages = 90;
+
+export function isContextSize(value: unknown): value is typeof contextSizes[number] {
+  return typeof value === 'number' && contextSizes.some(size => size === value);
+}
+
+export function supportedContextSize(preferred: number, modelLimit: number) {
+  return contextSizes.filter(size => size <= preferred && size <= modelLimit).at(-1);
+}
+
+export function activeContextBudget(requested: number, threshold: number, loaded?: number) {
+  return Math.min(Math.floor(requested * threshold / 100), Math.max(1024, Math.min(loaded ?? requested, requested) - 4096));
+}
 
 // This is an estimate, not the model's tokenizer. UTF-8 bytes cover non-ASCII text more safely than character count.
 export function estimateTokens(messages: AgentMessage[], tools: AgentTool[] = []) {

@@ -14,7 +14,7 @@ export type DesktopBridge = {
   onState: (id: string, notify: (state: BrowserState) => void) => () => void;
   ollamaStatus: () => Promise<OllamaStatus>;
   ollamaSetup: (model: OllamaModel) => Promise<void>;
-  agentChat: (messages: AgentMessage[], tools: AgentTool[]) => Promise<AgentChatResult>;
+  agentChat: (messages: AgentMessage[], tools: AgentTool[], contextSize: number) => Promise<AgentChatResult>;
   agentCancel: () => void;
   agentWebsiteAccess: (clientId: string | null) => Promise<void>;
   agentWebsite: (id: string, action: 'inspect' | 'click' | 'type', index?: number, value?: string) => Promise<string>;
